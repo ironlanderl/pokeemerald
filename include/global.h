@@ -602,6 +602,10 @@ struct Pokeblock
     u8 bitter;
     u8 sour;
     u8 feel;
+    // The retail layout stores each entry in 8 bytes (see the offset comments on
+    // SaveBlock1: pokeblocks at 0x848, seen1 at 0x988, 40 entries). Pad to match
+    // so the native build reads and writes the same flash save layout.
+    u8 unused;
 };
 
 struct Roamer

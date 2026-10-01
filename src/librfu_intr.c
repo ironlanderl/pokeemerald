@@ -395,6 +395,25 @@ static void STWI_init_slave(void)
     REG_SIOCNT = SIO_INTR_ENABLE | SIO_32BIT_MODE | SIO_57600_BPS | SIO_ENABLE;
 }
 
+// These three are empty "do nothing" callbacks that the link stack installs.
+// The originals are ARM NAKED trampolines (`bx rN`) whose only effect is to
+// return; on a native build a plain C stub does the same thing.
+#if defined(PLATFORM_NATIVE)
+
+static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)(void))
+{
+}
+
+static void Callback_Dummy_S(u16 reqCommandId, void (*callbackS)(u16))
+{
+}
+
+static void Callback_Dummy_ID(void (*callbackId)(void))
+{
+}
+
+#else
+
 NAKED
 #if __STDC_VERSION__ < 202311L
 static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)())
@@ -416,3 +435,5 @@ static void Callback_Dummy_ID(void (*callbackId)(void))
 {
     asm("bx r0");
 }
+
+#endif // PLATFORM_NATIVE

@@ -436,6 +436,20 @@ static int MultiBootHandShake(struct MultiBootParam *mp)
 #undef must_data
 }
 
+// Busy-waits a number of CPU cycles. The original is a NAKED ARM routine; it
+// only ever runs on the link/multiboot path, which the native port does not
+// support, so a plain loop is sufficient.
+#if defined(PLATFORM_NATIVE)
+
+static void MultiBootWaitCycles(u32 cycles)
+{
+    volatile u32 i;
+    for (i = 0; i < cycles; i++)
+        ;
+}
+
+#else
+
 NAKED
 static void MultiBootWaitCycles(u32 cycles)
 {
@@ -454,6 +468,8 @@ MultiBootWaitCyclesLoop:\n\
     bgt  MultiBootWaitCyclesLoop\n\
     bx   lr\n");
 }
+
+#endif // PLATFORM_NATIVE
 
 static void MultiBootWaitSendDone(void)
 {

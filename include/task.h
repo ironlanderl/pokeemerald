@@ -6,7 +6,17 @@
 #define TASK_NONE TAIL_SENTINEL
 
 #define NUM_TASKS 16
+
+// Several subsystems reinterpret Task::data as a larger struct (ListMenu is the
+// worst case, and STATIC_ASSERT in list_menu.c enforces the bound). On the GBA
+// every pointer is 4 bytes; on a 64-bit host they are 8, so the same structs
+// need proportionally more room. Grow the data array to match, which keeps the
+// aliasing behaviour identical -- only the amount of scratch space differs.
+#if defined(PLATFORM_NATIVE)
+#define NUM_TASK_DATA 28
+#else
 #define NUM_TASK_DATA 16
+#endif
 
 typedef void (*TaskFunc)(u8 taskId);
 
