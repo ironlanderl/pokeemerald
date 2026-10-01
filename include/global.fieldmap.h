@@ -104,7 +104,11 @@ struct ObjectEventTemplate
              //u16 padding2:8;
     /*0x0C*/ u16 trainerType;
     /*0x0E*/ u16 trainerRange_berryTreeId;
-    /*0x10*/ const u8 *script;
+    // Stored as a plain 32-bit value rather than a real pointer. This field is
+    // part of SaveBlock1, so a host pointer would be 8 bytes on a 64-bit build
+    // and shift every later field. The script always lives in ROM, which the
+    // native port maps below 4 GiB, so 32 bits is always sufficient.
+    /*0x10*/ uptr32 script;
     /*0x14*/ u16 flagId;
     /*0x16*/ //u8 padding3[2];
 };

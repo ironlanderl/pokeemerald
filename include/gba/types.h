@@ -24,6 +24,26 @@ typedef volatile s64 vs64;
 typedef float  f32;
 typedef double f64;
 
+// A 32-bit "pointer" for data stored inside the save block.
+//
+// On the GBA every pointer is 4 bytes, so structs written to the flash save are
+// laid out with 4-byte pointers. On a 64-bit host a real pointer is 8 bytes,
+// which would change the size of every struct containing one and corrupt the
+// save format. Storing the value in 32 bits keeps save-resident structs
+// byte-identical to the retail layout on any host.
+//
+// Only valid for targets addressable from 32 bits: ROM (mapped at 0x08000000 by
+// the native port) qualifies. Use SAVE_PTR_TO / SAVE_PTR_FROM at the boundaries.
+#if defined(PLATFORM_NATIVE)
+typedef uint32_t uptr32;
+#define SAVE_PTR_TO(p) ((uptr32)(uintptr_t)(const void *)(p))
+#define SAVE_PTR_FROM(x) ((const u8 *)(uintptr_t)(x))
+#else
+typedef const u8 *uptr32;
+#define SAVE_PTR_TO(p) ((const u8 *)(p))
+#define SAVE_PTR_FROM(x) ((x))
+#endif
+
 typedef u8  bool8;
 typedef u16 bool16;
 typedef u32 bool32;

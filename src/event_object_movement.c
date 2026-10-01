@@ -2368,7 +2368,9 @@ void SetObjectEventDirection(struct ObjectEvent *objectEvent, u8 direction)
 
 static const u8 *GetObjectEventScriptPointerByLocalIdAndMap(u8 localId, u8 mapNum, u8 mapGroup)
 {
-    return GetObjectEventTemplateByLocalIdAndMap(localId, mapNum, mapGroup)->script;
+    // ObjectEventTemplate::script is a 32-bit value on native builds; it always
+    // points into ROM.
+    return SAVE_PTR_FROM(GetObjectEventTemplateByLocalIdAndMap(localId, mapNum, mapGroup)->script);
 }
 
 const u8 *GetObjectEventScriptPointerByObjectEventId(u8 objectEventId)
@@ -2489,7 +2491,7 @@ static void OverrideObjectEventTemplateScript(const struct ObjectEvent *objectEv
 
     objectEventTemplate = GetBaseTemplateForObjectEvent(objectEvent);
     if (objectEventTemplate)
-        objectEventTemplate->script = script;
+        objectEventTemplate->script = SAVE_PTR_TO(script);
 }
 
 void TryOverrideTemplateCoordsForObjectEvent(const struct ObjectEvent *objectEvent, u8 movementType)
