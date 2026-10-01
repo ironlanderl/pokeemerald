@@ -20,10 +20,10 @@
 
 // CpuSet: control bit 24 selects 32-bit mode, bit 26 selects fill vs copy.
 //
-// Named CpuSet_ rather than CpuSet because include/gba/syscall.h defines a
-// MODERN-mode macro of the same name that expands to a call to itself (to add
-// alignment assertions); defining the function here would shadow it.
-void CpuSet_(const void *src, void *dest, u32 control)
+// The MODERN-mode CpuSet macro in include/gba/syscall.h is disabled for native
+// builds -- its alignment assertions describe the ARM target's access rules,
+// not a host's -- so a plain function of this name is what callers need.
+void CpuSet(const void *src, void *dest, u32 control)
 {
     u32 flags = control >> 24;
     bool fill = (flags & 4) != 0;
@@ -64,8 +64,8 @@ void CpuSet_(const void *src, void *dest, u32 control)
     }
 }
 
-// CpuFastSet: always 32-bit. See CpuSet_ for the naming rationale.
-void CpuFastSet_(const void *src, void *dest, u32 control)
+// CpuFastSet: always 32-bit. See CpuSet for why the macro is disabled natively.
+void CpuFastSet(const void *src, void *dest, u32 control)
 {
     u32 count = control & 0x1FFFFF;
     u32 *d = (u32 *)dest;
@@ -323,5 +323,9 @@ void VBlankIntrWait(void)
     // Handled by the virtual frame clock; wait until the pending VBlank flag is
     // cleared by the interrupt dispatcher.
     while (!native_timing_run_interrupt())
+    {
         native_timing_advance_to_next_vblank();
+        if (native_shutdown_requested())
+            return;
+    }
 }

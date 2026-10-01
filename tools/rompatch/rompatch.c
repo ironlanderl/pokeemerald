@@ -39,6 +39,8 @@ struct sym
     char *name;
     GElf_Addr addr;
     unsigned index;
+    bool global; // GLOBAL/WEAK binding, so native code can reference it
+    bool native_defined; // also defined in a natively-compiled object
 };
 
 static struct sym **g_syms;
@@ -106,6 +108,8 @@ static struct sym *sym_intern(Elf *elf, const char *name)
         die("out of memory");
     s->addr = 0;
     s->index = (unsigned)g_syms_len;
+    s->global = false;
+    s->native_defined = false;
     g_syms[g_syms_len++] = s;
     g_sym_hash[slot] = s->index + 1;
     (void)elf;
@@ -149,6 +153,14 @@ static void patch_add(uint32_t offset, const struct sym *target)
 static bool addr_is_rom(GElf_Addr a)
 {
     return a >= ROM_BASE && a < ROM_END;
+}
+
+// EWRAM (0x02000000) and IWRAM (0x03000000). These are recompiled natively
+// like everything else, so they are treated as ordinary native symbols rather
+// than being defined as absolute addresses.
+static bool addr_is_ram(GElf_Addr a)
+{
+    return (a >= 0x02000000u && a < 0x02040000u) || (a >= 0x03000000u && a < 0x03008000u);
 }
 
 // Look up the final ROM address of one section of one object.
@@ -210,18 +222,22 @@ static bool find_section_addr(const struct obj_sec *secs, size_t n, const char *
 
 int main(int argc, char **argv)
 {
-    if (argc != 6)
+    if (argc != 9)
     {
         fprintf(stderr,
                 "usage: %s <pokeemerald.elf> <pokeemerald.map> <objdir>"
-                " <rom_syms.h> <rom_patches.c>\n",
+                " <native_syms.txt> <exclude_syms.txt>"
+                " <rom_syms.h> <rom_patches.c> <rom_syms.S>\n",
                 argv[0]);
         return 2;
     }
     const char *map_path = argv[2];
     const char *objdir = argv[3];
-    const char *out_hdr = argv[4];
-    const char *out_src = argv[5];
+    const char *native_syms = argv[4];
+    const char *exclude_syms = argv[5];
+    const char *out_hdr = argv[6];
+    const char *out_src = argv[7];
+    const char *out_asm = argv[8];
 
     if (elf_version(EV_CURRENT) == EV_NONE)
         die("libelf is too old");
@@ -288,6 +304,59 @@ int main(int argc, char **argv)
         struct sym *sym = sym_intern(elf, name);
         sym->addr = symtab[i].st_value;
         rom_syms++;
+
+        // A RAM symbol with the same name is recompiled natively; make sure the
+        // single interned entry is marked as natively defined.
+        (void)0;
+    }
+
+    // Any symbol living in EWRAM/IWRAM is recompiled natively too, so it must
+    // never be emitted as an absolute ROM address.
+    for (size_t i = 0; i < g_syms_len; i++)
+        if (addr_is_ram(g_syms[i]->addr))
+            g_syms[i]->native_defined = true;
+
+    // Mark every symbol the native link already defines. These are the assets
+    // declared with INCGFX/INCBIN in src/*.c, which the ROM build also places
+    // in the image; the native definition wins and must not also be emitted as
+    // an absolute ROM address.
+    {
+        FILE *nf = fopen(native_syms, "r");
+        if (!nf)
+            die("cannot open native symbol list");
+        char line[512];
+        while (fgets(line, sizeof(line), nf))
+        {
+            size_t n = strlen(line);
+            while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+                line[--n] = '\0';
+            if (!n)
+                continue;
+            struct sym *sy = sym_intern(elf, line);
+            sy->native_defined = true;
+        }
+        fclose(nf);
+    }
+
+    // Names that must never be emitted as absolute ROM addresses, even though
+    // the ROM happens to define them. The GBA link resolves libc calls (strcmp,
+    // memcpy, memset) to routines placed inside the ROM image; a native link
+    // must use the host's versions instead, or every call site jumps into the
+    // mapped ROM image instead of running.
+    {
+        FILE *ef = fopen(exclude_syms, "r");
+        if (!ef)
+            die("cannot open exclusion list");
+        char line[512];
+        while (fgets(line, sizeof(line), ef))
+        {
+            size_t n = strlen(line);
+            while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+                line[--n] = '\0';
+            if (n)
+                sym_intern(elf, line)->native_defined = true;
+        }
+        fclose(ef);
     }
 
     // ---- Pass 2: relocations --------------------------------------------
@@ -303,7 +372,7 @@ int main(int argc, char **argv)
     //
     // Only objects under build/emerald are considered: those are the ones whose
     // contents live in the ROM.
-    unsigned long patched = 0, skipped = 0;
+    unsigned long patched = 0, skipped = 0, unpatchable = 0, skipped_native = 0;
 
     // For each object, where did each of its sections land in the final image?
     struct obj_sec *secs = NULL;
@@ -469,7 +538,9 @@ int main(int argc, char **argv)
                     continue;
                 }
 
-                patch_add(sec_base + rels[k].r_offset, sym_intern(elf, nm));
+                struct sym *tgt = sym_intern(elf, nm);
+                tgt->global = true; // REL targets are always global bindings
+                patch_add(sec_base + rels[k].r_offset, tgt);
                 patched++;
             }
         }
@@ -496,7 +567,55 @@ int main(int argc, char **argv)
         fprintf(f, "\"%s\",\n", g_syms[i]->name);
     fprintf(f, "};\n");
     fprintf(f, "const unsigned g_rom_symbol_count = %zu;\n", g_syms_len);
-    fclose(f);
+
+    // Addresses for every symbol the tool knows about.
+    //
+    // ROM-resident symbols get absolute definitions in rom_syms.s, so their
+    // address is the ROM address and they need no patching. Everything else
+    // was recompiled natively and lives wherever the native linker put it; we
+    // read that back out of this ELF, which is the native link, so the value
+    // here is already correct.
+    // Addresses for every symbol the tool knows about.
+//
+// ROM-resident symbols get absolute definitions in rom_syms.s, so their
+// address is simply the ROM address and they need no patching: they are read
+// in place out of the mapped image.
+//
+// Everything else was recompiled natively and lives wherever the native linker
+// placed it, which this tool cannot know. Emit a real C reference so the
+// native linker resolves it; the loader reads the result at startup.
+//
+// Local symbols (static functions and asm-local labels) cannot be referenced
+// this way. Those get address 0 and are skipped, which is safe as long as the
+// game never calls through the ROM word -- the count is reported at the end.
+fprintf(f, "\n/* Native symbols referenced by the table below. */\n");
+    for (size_t i = 0; i < g_syms_len; i++)
+    {
+        struct sym *sy = g_syms[i];
+        if (sy->global && !addr_is_rom(sy->addr))
+            fprintf(f, "extern char %s[];\n", sy->name);
+    }
+
+    fprintf(f, "\nconst uint64_t g_rom_symbol_addrs[] = {\n");
+for (size_t i = 0; i < g_syms_len; i++)
+{
+    struct sym *s = g_syms[i];
+    if (addr_is_rom(s->addr))
+    {
+        fprintf(f, "0x%08lxul, /* %s (in ROM) */\n", (unsigned long)s->addr, s->name);
+    }
+    else if (s->global)
+    {
+        fprintf(f, "(uint64_t)(uintptr_t)&%s, /* %s */\n", s->name, s->name);
+    }
+    else
+    {
+        fprintf(f, "0, /* %s (local, unpatchable) */\n", s->name);
+        unpatchable++;
+    }
+}
+fprintf(f, "};\n");
+fclose(f);
 
     // ---- Emit rom_syms.h -------------------------------------------------
     FILE *h = fopen(out_hdr, "w");
@@ -516,10 +635,48 @@ int main(int argc, char **argv)
     }
     fclose(h);
 
+    // ---- Emit rom_syms.S -------------------------------------------------
+    //
+    // This is the other half of the assets-from-ROM mechanism. The vast
+    // majority of the game's data -- map layouts, tilesets, event scripts,
+    // battle scripts, sound tables -- is assembled into the ROM by
+    // ld_script.ld and has no C definition. Native code needs those names to
+    // resolve, so emit absolute symbol assignments; with -no-pie, reading
+    // `extern const u8 gFoo[]` then yields the address inside the mapped ROM.
+    //
+    // A subset of ROM symbols is also defined natively: graphics pulled in
+    // through INCGFX/INCBIN become C arrays in src/*.c, so the same name
+    // exists in both. Those must come from the native object, or the link
+    // fails with a duplicate definition. Pass the native symbol list in and
+    // skip anything it already defines.
+    FILE *as_ = fopen(out_asm, "w");
+    if (!as_)
+        die("cannot write rom_syms.S");
+
+    fprintf(as_, "/* Generated by tools/rompatch from %s. Do not edit. */\n", argv[1]);
+    fprintf(as_, "/* Absolute definitions for ROM-resident symbols that have no\n"
+                 " * native C definition. */\n\n");
+
+    for (size_t i = 0; i < g_syms_len; i++)
+    {
+        struct sym *sy = g_syms[i];
+        if (!addr_is_rom(sy->addr) && !addr_is_ram(sy->addr))
+            continue;
+        if (sy->native_defined)
+        {
+            skipped_native++;
+            continue;
+        }
+        fprintf(as_, ".globl %s\n", sy->name);
+        fprintf(as_, ".set %s, 0x%08lx\n\n", sy->name, (unsigned long)sy->addr);
+    }
+    fclose(as_);
+
     elf_end(elf);
     close(fd);
 
-    fprintf(stderr, "rompatch: %u ROM symbols, %zu total, %lu patches, %lu skipped\n",
-            rom_syms, g_syms_len, patched, skipped);
+    fprintf(stderr, "rompatch: %u ROM symbols, %zu total, %lu patches, %lu skipped"
+                   ", %lu unpatchable-local, %lu skipped (native def)\n",
+            rom_syms, g_syms_len, patched, skipped, unpatchable, skipped_native);
     return 0;
 }

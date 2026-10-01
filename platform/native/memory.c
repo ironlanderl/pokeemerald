@@ -36,8 +36,15 @@ struct rom_patch
 
 extern const struct rom_patch g_rom_patches[];
 extern const unsigned g_rom_patch_count;
-extern const uint64_t g_rom_symbol_addrs[];
+extern const char *const g_rom_symbol_names[];
 extern const unsigned g_rom_symbol_count;
+
+// Addresses of every symbol the patch table can target, emitted by
+// tools/rompatch. ROM-resident entries are the ROM address; entries that were
+// recompiled natively are emitted as C references so the native linker
+// resolves them. A zero entry means the symbol was local in the ROM build and
+// cannot be referenced natively, so that word is left alone.
+extern const uint64_t g_rom_symbol_addrs[];
 
 static char s_error[512];
 static bool s_rom_ready;
@@ -76,9 +83,10 @@ static void *map_region(uint32_t base, size_t len)
 
 // Map the ROM file at 0x08000000.
 //
-// The file is mapped MAP_PRIVATE so writes are copy-on-write and never reach
-// disk. The first 64 KiB additionally covers the cart GPIO port at 0x080000C4,
-// which RtcInit pokes at boot; keeping that window writable prevents a fault.
+// The whole image must be writable: the pointer-patch pass rewrites words
+// throughout it (up to ~9.6 MiB in), and RtcInit pokes the cartridge GPIO port
+// at 0x080000C4. The mapping is MAP_PRIVATE, so these writes are copy-on-write
+// and never reach the file on disk.
 static uint8_t *map_rom(const char *rom_path)
 {
     int fd = open(rom_path, O_RDONLY);
@@ -103,8 +111,8 @@ static uint8_t *map_rom(const char *rom_path)
         return NULL;
     }
 
-    void *p = mmap((void *)(uintptr_t)NATIVE_ROM_BASE, NATIVE_ROM_SIZE, PROT_READ,
-                   MAP_PRIVATE | MAP_FIXED_NOREPLACE, fd, 0);
+    void *p = mmap((void *)(uintptr_t)NATIVE_ROM_BASE, NATIVE_ROM_SIZE,
+                   PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED_NOREPLACE, fd, 0);
     close(fd);
     if (p == MAP_FAILED)
     {
@@ -112,15 +120,6 @@ static uint8_t *map_rom(const char *rom_path)
         return NULL;
     }
 
-    // Widen the first window to read/write. Splitting a mapping's protection
-    // requires the new mapping to cover whole pages, so round up to 64 KiB
-    // (the page size on every platform we target).
-    if (mprotect((void *)(uintptr_t)NATIVE_ROM_BASE, NATIVE_ROM_RW_WINDOW,
-                 PROT_READ | PROT_WRITE) != 0)
-    {
-        set_error("cannot make ROM GPIO window writable: %s", strerror(errno));
-        return NULL;
-    }
     return (uint8_t *)p;
 }
 
@@ -173,14 +172,30 @@ static uint8_t *map_flash(const char *save_path)
 // symbol. Anything the game never dereferences is left alone.
 static void apply_rom_patches(uint8_t *rom)
 {
+    if (g_rom_patch_count == 0)
+    {
+        native_log("warning: ROM patch table is empty; pointer tables will be stale");
+        return;
+    }
+
+    native_log("applying %u ROM pointer patches", g_rom_patch_count);
+
+    // The generated table holds, for every patch target, the address it should
+    // take: either the ROM address (data still read in place) or the native
+    // address of a symbol that was recompiled. A zero means the symbol was
+    // local to the ROM build and cannot be referenced natively, in which case
+    // the original ROM word is already correct for data, and the game never
+    // calls through it.
     for (unsigned i = 0; i < g_rom_patch_count; i++)
     {
         const struct rom_patch *p = &g_rom_patches[i];
         if (p->target >= g_rom_symbol_count)
             continue;
+
         uint64_t addr = g_rom_symbol_addrs[p->target];
         if (addr == 0)
-            continue; // symbol not present in the native binary
+            continue;
+
         uint32_t value = (uint32_t)addr;
         memcpy(rom + p->rom_offset, &value, sizeof(value));
     }

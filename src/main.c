@@ -10,6 +10,9 @@
 #include "scanline_effect.h"
 #include "overworld.h"
 #include "play_time.h"
+#if PLATFORM_NATIVE
+#include "native.h"
+#endif
 #include "random.h"
 #include "dma3.h"
 #include "gba/flash_internal.h"
@@ -165,6 +168,13 @@ void AgbMain(void)
         PlayTimeCounter_Update();
         MapMusicMain();
         WaitForVBlank();
+
+#if PLATFORM_NATIVE
+        // The window was closed (or a headless frame limit was reached); leave
+        // the loop so the process can shut SDL down and exit.
+        if (native_shutdown_requested())
+            return;
+#endif
     }
 }
 
@@ -298,9 +308,16 @@ void InitIntrHandlers(void)
     for (i = 0; i < INTR_COUNT; i++)
         gIntrTable[i] = gIntrTableTemplate[i];
 
+#if PLATFORM_NATIVE
+    // On the GBA this copies the ARM IntrMain dispatcher out of ROM into IWRAM
+    // and points the CPU's IRQ vector at it. The native port dispatches
+    // interrupts in C (platform/native/timing.c), so there is nothing to copy;
+    // INTR_VECTOR is left unused.
+#else
     DmaCopy32(3, IntrMain, IntrMain_Buffer, sizeof(IntrMain_Buffer));
 
     INTR_VECTOR = IntrMain_Buffer;
+#endif
 
     SetVBlankCallback(NULL);
     SetHBlankCallback(NULL);
@@ -411,8 +428,28 @@ static void WaitForVBlank(void)
 {
     gMain.intrCheck &= ~INTR_FLAG_VBLANK;
 
+#if PLATFORM_NATIVE
+    // The native port drives interrupts from a virtual frame clock rather than
+    // hardware, so the spin has to advance that clock. Without this the main
+    // loop would hang on a flag nothing can set.
+    //
+    // Once shutdown is requested there is no window left to present to, so
+    // unwind the main loop instead of spinning on a flag that will never be
+    // set again (which would spin the CPU and grow the stack via the caller's
+    // frame).
+    if (native_shutdown_requested())
+        return;
+
+    while (!(gMain.intrCheck & INTR_FLAG_VBLANK))
+    {
+        native_timing_advance_to_next_vblank();
+        if (native_shutdown_requested())
+            return;
+    }
+#else
     while (!(gMain.intrCheck & INTR_FLAG_VBLANK))
         ;
+#endif
 }
 
 void SetTrainerHillVBlankCounter(u32 *counter)

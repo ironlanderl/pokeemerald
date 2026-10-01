@@ -45,3 +45,7 @@ prefabs.json
 /pokeemerald-*.png
 /pokeemerald_modern-*.png
 .porydaw/
+
+# Native port build outputs
+/platform/native/build/
+/build/native/

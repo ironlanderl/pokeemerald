@@ -98,10 +98,13 @@ uint64_t native_cycle_count(void);
 // Call the pending interrupt if IE & IF select one. Returns true if dispatched.
 bool native_timing_run_interrupt(void);
 
-// Frame stepping, all driven from the game's own thread.
-void native_timing_step_scanline(void);
+// The frame clock runs on its own thread because m4aSoundInit busy-waits for
+// VCOUNT during boot, before the game loop starts. It owns VCOUNT only.
+void native_timing_start_clock(void);
+void native_timing_stop_clock(void);
+
+// Block until the next VBlank, dispatching the game's handler.
 void native_timing_advance_to_next_vblank(void);
-void native_timing_run_frame(void);
 
 // Interrupt enable/flag state, shared with src/gpu_regs.c and src/m4a.c.
 void native_timing_set_ie(uint16_t v);
@@ -113,9 +116,39 @@ uint16_t native_timing_get_if(void);
 void native_timing_ack(uint16_t flags);
 
 // ---------------------------------------------------------------------------
+// Video (video.c) and input
+// ---------------------------------------------------------------------------
+
+// Creates the SDL2 window and GL context.
+bool native_video_init(int scale);
+void native_video_render(void);
+void native_video_shutdown(void);
+
+// Pumps SDL events and refreshes REG_KEYINPUT. Returns false if the window was
+// closed.
+bool native_input_poll(void);
+
+// ---------------------------------------------------------------------------
+// PPU (ppu.c)
+// ---------------------------------------------------------------------------
+
+void native_ppu_render_frame(void);
+const uint32_t *native_ppu_framebuffer(void);
+
+// Layer isolation toggles for the debug menu: BG0..BG3, OBJ, backdrop.
+extern bool native_ppu_layer_visible[6];
+
+// ---------------------------------------------------------------------------
 // Platform services
 // ---------------------------------------------------------------------------
 
 void native_log(const char *fmt, ...);
+
+// Run a fixed number of frames and optionally write the last one to a PPM.
+void native_set_headless(int frames, const char *shotPath);
+
+// Set when the user closes the window; AgbMain's loop cannot return on its own.
+void native_request_shutdown(void);
+bool native_shutdown_requested(void);
 
 #endif // PLATFORM_NATIVE_H

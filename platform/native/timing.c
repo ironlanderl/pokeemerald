@@ -16,11 +16,13 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 // Set by the interrupt dispatcher and consumed by WaitForVBlank.
 static uint8_t s_vcount;
 static uint64_t s_cycles;
 static bool s_enabled;
+static bool s_shutdown_requested;
 
 // Cached interrupt state, mirroring REG_IE / REG_IF / REG_IME.
 static volatile uint16_t s_ie;
@@ -45,6 +47,18 @@ void native_timing_set_enabled(bool enabled)
 bool native_timing_enabled(void)
 {
     return s_enabled;
+}
+
+// Asked for by the input layer when the window is closed. AgbMain runs an
+// infinite loop, so this unwinds it from inside WaitForVBlank instead.
+void native_request_shutdown(void)
+{
+    s_shutdown_requested = true;
+}
+
+bool native_shutdown_requested(void)
+{
+    return s_shutdown_requested;
 }
 
 uint8_t native_vcount(void)
@@ -112,6 +126,25 @@ bool native_timing_run_interrupt(void)
         IntrFunc fn = gIntrTable[i];
         if (fn)
             fn();
+
+        // VBlank is where the real hardware scans out the frame, and where
+        // AgbMain's WaitForVBlank unblocks. Render and present here so the
+        // image is produced at exactly the moment the game expects it, and so
+        // the window/input stay responsive without a second thread.
+        if (flag == INTR_FLAG_VBLANK && s_enabled)
+        {
+            void native_ppu_render_frame(void);
+            void native_video_render(void);
+            bool native_input_poll(void);
+            native_ppu_render_frame();
+            native_video_render();
+            {
+                void native_timing_note_frame(void);
+                native_timing_note_frame();
+            }
+            if (!native_input_poll())
+                native_request_shutdown();
+        }
         return true;
     }
     return false;
@@ -137,30 +170,13 @@ static void TickScanline(uint8_t line)
     native_timing_run_interrupt();
 }
 
-// Advance exactly one scanline of virtual time.
-void native_timing_step_scanline(void)
-{
-    TickScanline(s_vcount);
-    s_vcount++;
-    if (s_vcount >= NATIVE_TOTAL_SCANLINES)
-        s_vcount = 0;
-    s_cycles += NATIVE_CYCLES_PER_SCANLINE;
-}
-
-// Run until the start of the next VBlank. Used by WaitForVBlank.
+// Wait for the next VBlank. The clock thread owns VCOUNT and raises IF; all
+// this does is run the game's handler when the flag arrives.
 void native_timing_advance_to_next_vblank(void)
 {
-    do
-    {
-        native_timing_step_scanline();
-    } while (s_vcount != NATIVE_VBLANK_START);
-}
-
-// Run one whole frame (228 scanlines).
-void native_timing_run_frame(void)
-{
-    for (int i = 0; i < NATIVE_TOTAL_SCANLINES; i++)
-        native_timing_step_scanline();
+    while (!(s_if & INTR_FLAG_VBLANK))
+        native_timing_run_interrupt();
+    native_timing_run_interrupt(); // dispatch the VBlank handler itself
 }
 
 // --- Interrupt enable/acknowledge, used by src/gpu_regs.c and src/m4a.c ---
@@ -198,4 +214,130 @@ uint16_t native_timing_get_if(void)
 void native_timing_ack(uint16_t flags)
 {
     s_if &= (uint16_t)~flags;
+}
+// ---------------------------------------------------------------------------
+// Frame clock
+//
+// VCOUNT has to advance independently of the game loop. m4aSoundInit busy-waits
+// for scanline 159 while still inside AgbMain's setup code, before the main
+// loop ever calls WaitForVBlank, so a clock that only advanced during interrupt
+// dispatch would deadlock there.
+//
+// A dedicated thread owns nothing but VCOUNT: it publishes the scanline to the
+// emulated IO page and nothing else. The game reads VCOUNT, so that is the only
+// shared state. Everything else (dispatching handlers, rendering) still happens
+// on the game's own thread, which keeps the spin-waits race-free: VBlankIntr is
+// called from WaitForVBlank, not from the clock thread.
+
+#include <pthread.h>
+#include <time.h>
+
+static pthread_t s_clock_thread;
+static bool s_clock_running;
+static volatile bool s_clock_stop;
+
+static void *clock_main(void *arg)
+{
+    (void)arg;
+    // A GBA frame is 280896 cycles at 16.78 MHz; spread 228 scanlines evenly.
+    const double kNsPerScanline = 16777216.0 / NATIVE_CYCLES_PER_SCANLINE / 1000.0;
+
+    struct timespec next;
+    clock_gettime(CLOCK_MONOTONIC, &next);
+
+    while (!s_clock_stop)
+    {
+        uint8_t line = s_vcount;
+        PublishVcount();
+
+        s_vcount++;
+        if (s_vcount >= NATIVE_TOTAL_SCANLINES)
+            s_vcount = 0;
+        s_cycles += NATIVE_CYCLES_PER_SCANLINE;
+
+        if (line == 150)
+            s_if |= INTR_FLAG_VCOUNT;
+        if (line == NATIVE_VBLANK_START)
+            s_if |= INTR_FLAG_VBLANK;
+        s_if |= INTR_FLAG_HBLANK;
+
+        long ns = (long)kNsPerScanline;
+        next.tv_nsec += ns;
+        while (next.tv_nsec >= 1000000000L)
+        {
+            next.tv_nsec -= 1000000000L;
+            next.tv_sec++;
+        }
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+    }
+    return NULL;
+}
+
+void native_timing_start_clock(void)
+{
+    if (s_clock_running)
+        return;
+    s_clock_stop = false;
+    if (pthread_create(&s_clock_thread, NULL, clock_main, NULL) == 0)
+        s_clock_running = true;
+    else
+        native_log("warning: could not start frame clock; VCOUNT will not advance");
+}
+
+void native_timing_stop_clock(void)
+{
+    if (!s_clock_running)
+        return;
+    s_clock_stop = true;
+    pthread_join(s_clock_thread, NULL);
+    s_clock_running = false;
+}
+
+// --- Headless capture ------------------------------------------------------
+//
+// For verification without a window: run a fixed number of frames, then write
+// the framebuffer out as a PPM and exit. Used to check the PPU against a
+// reference capture without needing an X server.
+
+static int s_frame_limit;
+static const char *s_shot_path;
+static int s_frames;
+
+void native_set_headless(int frames, const char *shotPath)
+{
+    s_frame_limit = frames;
+    s_shot_path = shotPath;
+}
+
+// Called after each frame is rendered. Writes the capture and asks the game to
+// unwind once the limit is reached.
+void native_timing_note_frame(void)
+{
+    if (s_frame_limit <= 0)
+        return;
+
+    if (++s_frames < s_frame_limit)
+        return;
+
+    if (s_shot_path)
+    {
+        extern const uint32_t *native_ppu_framebuffer(void);
+        FILE *f = fopen(s_shot_path, "wb");
+        if (f)
+        {
+            fprintf(f, "P6\n240 160\n255\n");
+            const uint32_t *fb = native_ppu_framebuffer();
+            for (int i = 0; i < 240 * 160; i++)
+            {
+                uint32_t c = fb[i];
+                fputc((c >> 0) & 0xFF, f);
+                fputc((c >> 8) & 0xFF, f);
+                fputc((c >> 16) & 0xFF, f);
+            }
+            fclose(f);
+            fprintf(stderr, "wrote %s after %d frames\n", s_shot_path, s_frames);
+        }
+    }
+
+    native_request_shutdown();
 }
