@@ -98,6 +98,20 @@ uint64_t native_cycle_count(void);
 // Call the pending interrupt if IE & IF select one. Returns true if dispatched.
 bool native_timing_run_interrupt(void);
 
+// Frame stepping, all driven from the game's own thread.
+void native_timing_step_scanline(void);
+void native_timing_advance_to_next_vblank(void);
+void native_timing_run_frame(void);
+
+// Interrupt enable/flag state, shared with src/gpu_regs.c and src/m4a.c.
+void native_timing_set_ie(uint16_t v);
+uint16_t native_timing_get_ie(void);
+void native_timing_set_ime(uint16_t v);
+uint16_t native_timing_get_ime(void);
+void native_timing_raise(uint16_t flags);
+uint16_t native_timing_get_if(void);
+void native_timing_ack(uint16_t flags);
+
 // ---------------------------------------------------------------------------
 // Platform services
 // ---------------------------------------------------------------------------
