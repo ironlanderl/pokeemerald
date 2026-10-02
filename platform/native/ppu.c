@@ -16,6 +16,7 @@
 // break them.
 
 #include "global.h"
+#include "scanline_effect.h"
 #include "native.h"
 
 #include <string.h>
@@ -192,51 +193,59 @@ static uint16_t DrawAffineBg2Pixel(int x, int y, uint16_t cnt)
 {
     int charBase = ((cnt & BGCNT_CHARBASE_MASK) >> 2) * BG_CHAR_SIZE;
     int screenBase = ((cnt & BGCNT_SCREENBASE_MASK) >> 8) * BG_SCREEN_SIZE;
+    bool eightBit = (cnt & BGCNT_256COLOR) != 0;
     int screenSize = (cnt & BGCNT_SCREENSIZE_MASK) >> 14;
 
-    static const int kAffW[4] = {16, 32, 64, 128};
-    static const int kAffH[4] = {16, 32, 64, 128};
+    // Affine screen sizes are 128/256/512/1024 pixels square.
+    static const int kAffTiles[4] = {16, 32, 64, 128};
+    const int mask = (kAffTiles[screenSize] * 8) - 1;
 
-    // Scroll origin: the high 28 bits live in BG2X_H, the low 4 in BG2X_L.
-    int32_t originX = (int32_t)((io_read16(0x2C) << 4) | (io_read16(0x28) & 0xF));
-    int32_t originY = (int32_t)((io_read16(0x2E) << 4) | (io_read16(0x2A) & 0xF));
-
-    // Sign-extend the 28-bit values.
-    if (originX & 0x08000000)
+    // Origin is 28 bits: the low 4 live in the _L register and the upper 24 in
+    // the _H register (include/gba/io_reg.h). The previous version read these
+    // the wrong way round, so every texture sample landed at (0, 0).
+    int32_t originX = ((int32_t)((uint32_t)io_read16(REG_OFFSET_BG2X_H) << 20)
+                       | (io_read16(REG_OFFSET_BG2X_L) & 0xFFF));
+    int32_t originY = ((int32_t)((uint32_t)io_read16(REG_OFFSET_BG2Y_H) << 20)
+                       | (io_read16(REG_OFFSET_BG2Y_L) & 0xFFF));
+    if (originX & 0x08000000) // the hardware treats these as signed 28-bit
         originX |= ~0x0FFFFFFF;
     if (originY & 0x08000000)
         originY |= ~0x0FFFFFFF;
 
-    int32_t pa = (int32_t)(short)io_read16(0x20);
-    int32_t pb = (int32_t)(short)io_read16(0x22);
-    int32_t pc = (int32_t)(short)io_read16(0x24);
-    int32_t pd = (int32_t)(short)io_read16(0x26);
+    int32_t pa = (int32_t)(int16_t)io_read16(REG_OFFSET_BG2PA);
+    int32_t pb = (int32_t)(int16_t)io_read16(REG_OFFSET_BG2PB);
+    int32_t pc = (int32_t)(int16_t)io_read16(REG_OFFSET_BG2PC);
+    int32_t pd = (int32_t)(int16_t)io_read16(REG_OFFSET_BG2PD);
 
-    // Texture coordinate of this screen pixel.
     int32_t dx = x - (originX >> 8);
     int32_t dy = y - (originY >> 8);
 
-    int32_t tx = (pa * dx + pb * dy) >> 8;
-    int32_t ty = (pc * dx + pd * dy) >> 8;
-
-    tx &= (kAffW[screenSize] * 8) - 1;
-    ty &= (kAffH[screenSize] * 8) - 1;
+    int32_t tx = ((pa * dx + pb * dy) >> 8) & mask;
+    int32_t ty = ((pc * dx + pd * dy) >> 8) & mask;
 
     uint16_t entry = vram_read16(screenBase + (uint32_t)((ty >> 3) * 32 + (tx >> 3)) * 2);
 
     int px = tx & 7;
     int py = ty & 7;
-    if (entry & 0x0400)
+    if (entry & 0x0400) // horizontal flip
         px = 7 - px;
-    if (entry & 0x0800)
+    if (entry & 0x0800) // vertical flip
         py = 7 - py;
 
     int tileNum = entry & 0x03FF;
-    uint8_t byte = vram_read8(charBase + tileNum * 32 + py * 4 + (px >> 1));
-    uint8_t index = (px & 1) ? (byte >> 4) : (byte & 0xF);
+    uint8_t index;
+    if (eightBit)
+    {
+        index = vram_read8(charBase + tileNum * 64 + py * 8 + px);
+    }
+    else
+    {
+        uint8_t byte = vram_read8(charBase + tileNum * 32 + py * 4 + (px >> 1));
+        index = (px & 1) ? (byte >> 4) : (byte & 0xF);
+    }
 
     if (index == 0)
-        return 0;
+        return 0; // colour 0 is transparent here too
 
     return pal_read16(index * 2);
 }
@@ -542,55 +551,111 @@ static void RenderScanline(int y)
         bool inW0 = (dispcnt & DISPCNT_WIN0_ON) && PixelInWindow(dispcnt, win0h, win0v, x, y, false);
         bool inW1 = (dispcnt & DISPCNT_WIN1_ON) && PixelInWindow(dispcnt, win1h, win1v, x, y, true);
 
-        uint32_t bgMask, objMask;
+        // Bit layout (include/gba/io_reg.h): for window 0, BG0..BG3 occupy
+        // bits 0-3, OBJ is bit 4 and CLR bit 5; window 1 repeats that at bits
+        // 8-13. An earlier version here tested bits 13 and 14 for OBJ, which
+        // are the CLR bits -- so every window masked sprites out.
+        uint32_t bgMask;
+        bool objEnabled;
         if (inW0)
         {
-            bgMask = winin & 0xFF;
-            objMask = (winin & 0x2000) ? 1u : 0;
+            bgMask = winin & 0x0F;
+            objEnabled = (winin & (1 << 4)) != 0;
         }
         else if (inW1)
         {
-            bgMask = (winin >> 8) & 0xFF;
-            objMask = (winin & 0x4000) ? 1u : 0;
+            bgMask = (winin >> 8) & 0x0F;
+            objEnabled = (winin & (1 << 12)) != 0;
         }
         else
         {
-            bgMask = winout & 0xFF;
-            objMask = (winout & 0x2000) ? 1u : 0;
+            bgMask = winout & 0x0F;
+            objEnabled = (winout & (1 << 4)) != 0;
         }
 
         if (!(bgMask & (1u << 0))) bgColor[0] = 0;
         if (!(bgMask & (1u << 1))) bgColor[1] = 0;
         if (!(bgMask & (1u << 2))) bgColor[2] = 0;
         if (!(bgMask & (1u << 3))) bgColor[3] = 0;
-        if (!objMask) objColor = 0;
+        if (!objEnabled) objColor = 0;
 
-        // Compose: lowest BG wins, then OBJ over it.
-        uint16_t first = color;
-        if (objColor != 0)
+        // Compose, then blend.
+        //
+        // BLDCNT bits 0-5 select which layers are "first target" and bits 8-13
+        // the "second target". The first target is the topmost layer that is
+        // both enabled and listed; it is then blended with the topmost enabled
+        // second-target layer (or the backdrop if none).
+        uint16_t first = 0;
+        uint32_t t1 = bldcnt & 0x3F;
+        for (int i = 0; i < 4; i++)
+            if (bgColor[i] != 0 && (t1 & (1u << i)))
+            {
+                first = bgColor[i];
+                break;
+            }
+        if (first == 0 && objColor != 0 && (t1 & (1u << 4)))
             first = objColor;
 
-        uint16_t second = s_backdrop;
-        if (objColor != 0 && !(bgMask & 0x0F))
-            second = color;
+        bool blended = first != 0;
 
-        // Blend if the first target is enabled.
-        uint32_t target1 = bldcnt & 0x3F;
-        bool useBlend = false;
-        if (objColor != 0)
-            useBlend = (target1 & (1u << 4)) != 0;
+        if (!blended)
+        {
+            // No blending: just take the topmost visible layer.
+            first = objColor != 0 ? objColor : color;
+        }
         else
         {
+            uint16_t second = 0;
+            uint32_t t2 = (bldcnt >> 8) & 0x3F;
             for (int i = 0; i < 4; i++)
-                if (bgColor[i] != 0 && (target1 & (1u << i)))
-                    useBlend = true;
+                if (bgColor[i] != 0 && (t2 & (1u << i)))
+                {
+                    second = bgColor[i];
+                    break;
+                }
+            if (second == 0 && objColor != 0 && (t2 & (1u << 4)))
+                second = objColor;
+
+            s_framebuffer[y][x] = ApplyBlending(bldcnt, bldalpha, bldy, first, second);
+            continue;
         }
 
-        if (useBlend)
-            s_framebuffer[y][x] = ApplyBlending(bldcnt, bldalpha, bldy, first, second);
-        else
-            s_framebuffer[y][x] = rgb15_to_rgba(first);
+        s_framebuffer[y][x] = rgb15_to_rgba(first);
     }
+}
+
+// HBlank DMA.
+//
+// src/scanline_effect.c arms DMA0 as a repeating HBlank transfer that writes one
+// value per scanline from gScanlineEffectRegBuffers[] into a single display
+// register (BG0HOFS, WIN0H, BLDY, ...). The game reads those same buffers
+// directly at index == VCOUNT, so the value for line N must be in place before
+// line N is drawn. Without this, every screen that uses a wave or wipe -- the
+// title screen included -- draws with stale scroll registers.
+//
+// state: 0 = inactive, 1 = armed, 3 = finished.
+extern struct ScanlineEffect gScanlineEffect;
+extern u16 gScanlineEffectRegBuffers[2][0x3C0];
+
+static void ApplyHBlankDma(int scanline)
+{
+    if (gScanlineEffect.state != 1 || gScanlineEffect.dmaDest == NULL)
+        return;
+    if (scanline >= 0x3C0)
+        return;
+
+    u16 *values = &gScanlineEffectRegBuffers[gScanlineEffect.srcBuffer][0];
+    volatile u32 *dest = (volatile u32 *)(uintptr_t)gScanlineEffect.dmaDest;
+    u32 control = gScanlineEffect.dmaControl;
+    u32 count = control & 0x1FFFFF;
+    if (count == 0)
+        return;
+
+    // DMA32 is bit 26 of the control word (see include/scanline_effect.h).
+    if (control & 0x04000000)
+        *dest = ((const u32 *)values)[scanline];
+    else
+        *(volatile u16 *)dest = values[scanline];
 }
 
 void native_ppu_render_frame(void)
@@ -600,7 +665,13 @@ void native_ppu_render_frame(void)
     memset(s_obj_index, OBJ_NONE, sizeof(s_obj_index));
 
     for (int y = 0; y < DISPLAY_HEIGHT; y++)
+    {
+        // The transfer for line N fires in HBlank *after* N is drawn, so line
+        // y is rendered with line y-1's value already in place.
+        if (y > 0)
+            ApplyHBlankDma(y - 1);
         RenderScanline(y);
+    }
 
     // Clear the unused scanlines below 160 so the GL texture is well defined.
     for (int y = DISPLAY_HEIGHT; y < NATIVE_TOTAL_SCANLINES && y < DISPLAY_HEIGHT; y++)
