@@ -136,7 +136,12 @@ bool native_timing_run_interrupt(void)
     volatile uint16_t *io = (volatile uint16_t *)NATIVE_IO;
     s_ie = io[REG_OFFSET_IE / 2];
     s_ime = io[REG_OFFSET_IME / 2];
-    if_clear(io[REG_OFFSET_IF / 2]);
+
+    // IF in the IO page is written both by the clock thread (raising) and by
+    // this dispatcher (acknowledging), and s_if is the authoritative copy.
+    // Merge anything the page has that s_if does not, then dispatch.
+    uint16_t page_if = io[REG_OFFSET_IF / 2];
+    if_raise(page_if & (uint16_t)~__atomic_load_n(&s_if, __ATOMIC_SEQ_CST));
 
     uint16_t pending = (uint16_t)(s_ie & __atomic_load_n(&s_if, __ATOMIC_SEQ_CST) & 0x3FFF);
     if (!s_ime || pending == 0)

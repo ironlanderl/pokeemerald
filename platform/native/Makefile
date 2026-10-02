@@ -117,7 +117,10 @@ $(OUT)/plat/%.o: %.c | dirs
 # --- 4. link -----------------------------------------------------------------
 # native.ld is an order-only prerequisite: it must not reach the link line twice.
 $(OUT)/$(TARGET): $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) | native.ld
-	$(CC) -no-pie -nostartfiles -T native.ld -o $@ $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) \
+# -nostartfiles is deliberately NOT used: the port has no crt0 of its own, so
+# the normal Scrt1.o provides _start, which runs the constructors libc needs
+# (including SDL's) before main() forwards to native_main with a real argc/argv.
+	$(CC) -no-pie -T native.ld -o $@ $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) \
 	   -lc -lm -lpthread $(SDL_LIBS)
 	@echo "built $@"
 

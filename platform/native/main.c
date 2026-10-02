@@ -11,6 +11,7 @@
 #include "global.h"
 #include "native.h"
 
+
 // Provided by video.c
 bool native_video_init(int scale);
 void native_video_render(void);
@@ -25,6 +26,19 @@ void AgbMain(void);
 
 static const char *kDefaultRom = "pokeemerald.gba";
 static const char *kDefaultSave = "pokeemerald.sav";
+
+// ENTRY points here, so no CRT has run and argc/argv are not set up. The
+// kernel passes them on the initial stack (argc at [sp], argv just above), so
+// recover them there. Reading them off the stack keeps this portable across
+// architectures, unlike an inline-asm trampoline.
+int native_main(int argc, char **argv);
+
+// The C runtime's _start calls main(); forward so argc/argv are set up by the
+// CRT rather than guessed from the stack.
+int main(int argc, char **argv)
+{
+    return native_main(argc, argv);
+}
 
 int native_main(int argc, char **argv)
 {
@@ -83,9 +97,4 @@ int native_main(int argc, char **argv)
 
     native_video_shutdown();
     return 0;
-}
-// The link uses the standard CRT, so this is the real program entry point.
-int main(int argc, char **argv)
-{
-    return native_main(argc, argv);
 }

@@ -10,7 +10,7 @@
  * as a ROM word. The load image is roughly 15 MiB, so 0x40000000 leaves ample
  * room and still clears the GBA window.
  */
-ENTRY(native_main)
+ENTRY(_start)
 
 /* Keep the standard interpreter/CRT relationship: we link libc normally and
  * only replace the entry symbol, so the dynamic loader behaves normally. */
@@ -21,7 +21,8 @@ gMaxLines = 0;
 SECTIONS
 {
     . = 0x40000000;
-    .text : { *(.text.startup) *(.text .text.*) }
+    /* Scrt1.o supplies _start, which calls main(); main is this port's. */
+    .text : { *(.text.startup) *(.init) *(.text .text.*) }
     . = ALIGN(4096);
     .rodata : { *(.rodata .rodata.*) }
     . = ALIGN(4096);

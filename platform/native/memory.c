@@ -54,14 +54,23 @@ const char *native_memory_error(void)
     return s_error[0] ? s_error : NULL;
 }
 
+// Diagnostics go through write(2) rather than stdio: before the memory map is
+// up, libc's FILE layer may allocate inside the very window we are about to
+// claim, and a lazy stdio buffer turns that into a confusing crash.
 void native_log(const char *fmt, ...)
 {
+    char buf[1024];
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    fputc('\n', stderr);
-    fflush(stderr);
+    if (n < 0)
+        return;
+    if (n > (int)sizeof(buf) - 2)
+        n = (int)sizeof(buf) - 2;
+    buf[n++] = '\n';
+    ssize_t ignored = write(2, buf, (size_t)n);
+    (void)ignored;
 }
 
 static void set_error(const char *fmt, ...)
@@ -78,7 +87,10 @@ static void *map_region(uint32_t base, size_t len)
     void *p = mmap((void *)(uintptr_t)base, len, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == MAP_FAILED)
+    {
+        native_log("mmap 0x%08x len=0x%zx failed: %s", base, len, strerror(errno));
         return NULL;
+    }
     return p;
 }
 
@@ -230,6 +242,7 @@ bool native_memory_init(const char *rom_path, const char *save_path)
 
     for (size_t i = 0; i < sizeof(regions) / sizeof(regions[0]); i++)
     {
+        native_log("mapping %s at 0x%08x len 0x%zx", regions[i].name, regions[i].base, regions[i].len);
         if (!map_region(regions[i].base, regions[i].len))
         {
             set_error("cannot map %s at 0x%08x: %s", regions[i].name, regions[i].base,

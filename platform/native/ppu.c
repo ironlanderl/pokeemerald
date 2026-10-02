@@ -83,8 +83,28 @@ static inline uint16_t io_read16(int offset)
     return *(volatile uint16_t *)(NATIVE_IO + offset);
 }
 
-static inline uint8_t pal_read16(int offset)
+// VRAM is 96 KiB. Tile indices come from registers and tilemaps, so a malformed
+// value must not be able to read outside the mapping.
+static inline uint8_t vram_read8(uint32_t addr)
 {
+    if (addr >= NATIVE_VRAM_SIZE)
+        return 0;
+    return *(volatile uint8_t *)(VRAM_BASE + addr);
+}
+
+static inline uint16_t vram_read16(uint32_t addr)
+{
+    if (addr + 1 >= NATIVE_VRAM_SIZE)
+        return 0;
+    return *(volatile uint16_t *)(VRAM_BASE + addr);
+}
+
+static inline uint16_t pal_read16(int offset)
+{
+    // Palette RAM is 1 KiB; the register value is attacker-visible data here, so
+    // clamp rather than faulting on a wild offset.
+    if (offset < 0 || offset >= NATIVE_PLTT_SIZE)
+        return 0;
     return *(volatile uint16_t *)(PLTT_BASE + offset);
 }
 
@@ -137,7 +157,7 @@ static uint16_t DrawTextBgPixel(int layer, int x, int y, uint16_t cnt)
     tileCol %= kScreenW[screenSize];
     tileRow %= kScreenH[screenSize];
 
-    uint16_t entry = *(volatile uint16_t *)(VRAM_BASE + screenBase + (tileRow * 32 + tileCol) * 2);
+    uint16_t entry = vram_read16(screenBase + (uint32_t)(tileRow * 32 + tileCol) * 2);
 
     bool hflip = (entry & 0x0400) != 0;
     bool vflip = (entry & 0x0800) != 0;
@@ -147,16 +167,16 @@ static uint16_t DrawTextBgPixel(int layer, int x, int y, uint16_t cnt)
         py = 7 - py;
 
     int tileNum = entry & 0x03FF;
-    uint32_t tileAddr = VRAM_BASE + charBase + (eightBit ? tileNum * 64 : tileNum * 32);
+    uint32_t tileAddr = (uint32_t)charBase + (eightBit ? tileNum * 64 : tileNum * 32);
     uint8_t index;
 
     if (eightBit)
     {
-        index = *(volatile uint8_t *)(tileAddr + py * 8 + px);
+        index = vram_read8(tileAddr + py * 8 + px);
     }
     else
     {
-        uint8_t byte = *(volatile uint8_t *)(tileAddr + py * 4 + (px >> 1));
+        uint8_t byte = vram_read8(tileAddr + py * 4 + (px >> 1));
         index = (px & 1) ? (byte >> 4) : (byte & 0xF);
     }
 
@@ -202,7 +222,7 @@ static uint16_t DrawAffineBg2Pixel(int x, int y, uint16_t cnt)
     tx &= (kAffW[screenSize] * 8) - 1;
     ty &= (kAffH[screenSize] * 8) - 1;
 
-    uint16_t entry = *(volatile uint16_t *)(VRAM_BASE + screenBase + ((ty >> 3) * 32 + (tx >> 3)) * 2);
+    uint16_t entry = vram_read16(screenBase + (uint32_t)((ty >> 3) * 32 + (tx >> 3)) * 2);
 
     int px = tx & 7;
     int py = ty & 7;
@@ -212,7 +232,7 @@ static uint16_t DrawAffineBg2Pixel(int x, int y, uint16_t cnt)
         py = 7 - py;
 
     int tileNum = entry & 0x03FF;
-    uint8_t byte = *(volatile uint8_t *)(VRAM_BASE + charBase + tileNum * 32 + py * 4 + (px >> 1));
+    uint8_t byte = vram_read8(charBase + tileNum * 32 + py * 4 + (px >> 1));
     uint8_t index = (px & 1) ? (byte >> 4) : (byte & 0xF);
 
     if (index == 0)
@@ -306,7 +326,7 @@ static void DrawSpritePixel(int x, int y, int oamIndex, bool *wrote, uint16_t *c
     addr += (py / 8) * (w / 8) * tileSize + (px / 8) * tileSize;
     addr += (py & 7) * (eightBit ? 8 : 4) + ((px & 7) >> 1);
 
-    uint8_t byte = *(volatile uint8_t *)(VRAM_BASE + addr);
+    uint8_t byte = vram_read8(addr);
     uint8_t index;
     if (eightBit)
         index = byte;
