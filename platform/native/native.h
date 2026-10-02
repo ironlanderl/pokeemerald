@@ -132,6 +132,9 @@ bool native_input_poll(void);
 // PPU (ppu.c)
 // ---------------------------------------------------------------------------
 
+// Service any immediate DMA the game has armed since the last call.
+void native_dma_service_now(void);
+
 void native_ppu_render_frame(void);
 const uint32_t *native_ppu_framebuffer(void);
 

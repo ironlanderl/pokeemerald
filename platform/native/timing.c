@@ -190,6 +190,11 @@ bool native_timing_run_interrupt(void)
             // Poll input before rendering so a key pressed during this VBlank is
             // visible to the game's main loop, which runs after WaitForVBlank
             // returns and reads REG_KEYINPUT before drawing the next frame.
+            // Run DMA the game armed (palette and VRAM copies use DMA_START_NOW),
+            // then poll input so a key pressed this VBlank is visible to the
+            // main loop.
+            void native_dma_service_now(void);
+            native_dma_service_now();
             native_timing_apply_press();
             if (!native_input_poll())
                 native_request_shutdown();
