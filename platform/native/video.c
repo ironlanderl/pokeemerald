@@ -24,6 +24,14 @@ static GLint s_uniform_tex;
 static GLuint s_vao;
 
 static uint16_t s_keyinput = 0x03FF; // active low: a set bit means released
+static uint16_t s_injected;          // bits forced by native_input_inject
+
+// Used by the headless capture path to simulate a held button.
+uint16_t native_input_set_bits(uint16_t bits)
+{
+    s_injected = bits;
+    return s_keyinput;
+}
 
 static const char *kVertexShader =
     "#version 130\n"
@@ -238,8 +246,10 @@ bool native_input_poll(void)
         }
     }
 
-    // REG_KEYINPUT is active low: a set bit means the key is up.
-    *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_KEYINPUT) = s_keyinput;
+    // REG_KEYINPUT is active low: a set bit means the key is up. Injected bits
+    // override the real keyboard so a headless run can drive the game.
+    uint16_t state = s_keyinput & ~s_injected;
+    *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_KEYINPUT) = state;
 
     // Toggle the debug menu.
     extern bool native_debug_menu_toggle_requested(void);

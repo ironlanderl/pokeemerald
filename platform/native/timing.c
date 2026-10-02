@@ -114,6 +114,8 @@ static void PublishVcount(void)
 #define INTR_FLAG_KEYPAD 0x1000
 #define INTR_FLAG_GAMEPAK 0x2000
 
+static void native_timing_apply_press(void);
+
 // gIntrTable from src/main.c, indexed by the slot order IntrMain used.
 extern IntrFunc gIntrTable[];
 extern int gIntrCount;
@@ -171,14 +173,17 @@ bool native_timing_run_interrupt(void)
             void native_ppu_render_frame(void);
             void native_video_render(void);
             bool native_input_poll(void);
-            native_ppu_render_frame();
-            native_video_render();
-            {
-                void native_timing_note_frame(void);
-                native_timing_note_frame();
-            }
+            void native_timing_note_frame(void);
+
+            // Poll input before rendering so a key pressed during this VBlank is
+            // visible to the game's main loop, which runs after WaitForVBlank
+            // returns and reads REG_KEYINPUT before drawing the next frame.
+            native_timing_apply_press();
             if (!native_input_poll())
                 native_request_shutdown();
+            native_ppu_render_frame();
+            native_video_render();
+            native_timing_note_frame();
         }
         return true;
     }
@@ -356,10 +361,48 @@ void native_set_headless(int frames, const char *shotPath)
     s_shot_path = shotPath;
 }
 
+// Simulate a key press at a given frame so headless runs can get past screens
+// that wait for input -- the intro exits on any button. This also exercises the
+// input path end to end without needing a real key event.
+static int s_press_at = -1;
+static uint16_t s_press_bits;
+static int s_press_clear;
+
+void native_input_schedule(int frame, uint16_t bits)
+{
+    s_press_at = frame;
+    s_press_bits = bits;
+}
+
+// Called once per frame from the VBlank path, before input is published.
+static void native_timing_apply_press(void)
+{
+    extern uint16_t native_input_set_bits(uint16_t bits);
+
+    // Hold the injected bits for a few frames so ReadKeys definitely samples
+    // them, then release so the next press produces a fresh rising edge.
+    if (s_press_clear > 0)
+    {
+        if (--s_press_clear == 0)
+            native_input_set_bits(0);
+        return;
+    }
+
+    if (s_press_at < 0 || s_frames < s_press_at)
+        return;
+
+    native_input_set_bits(s_press_bits);
+    s_press_clear = 4; // hold for 4 frames
+    s_press_at = -1;
+}
+
 // Called after each frame is rendered. Writes the capture and asks the game to
 // unwind once the limit is reached.
 void native_timing_note_frame(void)
 {
+    if (s_frame_limit <= 0 && s_press_at < 0)
+        return;
+
     if (s_frame_limit <= 0)
         return;
 

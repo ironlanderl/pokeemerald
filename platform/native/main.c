@@ -47,6 +47,8 @@ int native_main(int argc, char **argv)
     int scale = 3;
     int frame_limit = 0;          // 0 = run until the window closes
     const char *shot_path = NULL;  // write one PPM here and exit
+    int press_at = -1;            // frame at which to simulate a button press
+    uint16_t press_bits = 0;
 
     for (int i = 1; i < argc; i++)
     {
@@ -60,10 +62,15 @@ int native_main(int argc, char **argv)
             frame_limit = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc)
             shot_path = argv[++i];
+        else if (!strcmp(argv[i], "--press-at") && i + 1 < argc)
+            press_at = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--press") && i + 1 < argc)
+            press_bits = (uint16_t)strtoul(argv[++i], NULL, 0);
         else if (!strcmp(argv[i], "--help"))
         {
             printf("usage: %s [--rom FILE] [--save FILE] [--scale N]\n"
-                   "          [--frames N] [--shot FILE.ppm]\n",
+                   "          [--frames N] [--shot FILE.ppm]\n"
+                   "          [--press-at FRAME --press BITS]\n",
                    argv[0]);
             return 0;
         }
@@ -84,6 +91,8 @@ int native_main(int argc, char **argv)
 
     if (frame_limit || shot_path)
         native_set_headless(frame_limit, shot_path);
+    if (press_at >= 0)
+        native_input_schedule(press_at, press_bits);
 
     native_log("starting game");
 

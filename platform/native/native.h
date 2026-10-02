@@ -147,6 +147,9 @@ void native_log(const char *fmt, ...);
 // Run a fixed number of frames and optionally write the last one to a PPM.
 void native_set_headless(int frames, const char *shotPath);
 
+// Simulate holding the given REG_KEYINPUT bits from `frame` onward.
+void native_input_schedule(int frame, uint16_t bits);
+
 // Set when the user closes the window; AgbMain's loop cannot return on its own.
 void native_request_shutdown(void);
 bool native_shutdown_requested(void);
