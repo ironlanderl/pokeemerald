@@ -200,13 +200,15 @@ static uint16_t DrawAffineBg2Pixel(int x, int y, uint16_t cnt)
     static const int kAffTiles[4] = {16, 32, 64, 128};
     const int mask = (kAffTiles[screenSize] * 8) - 1;
 
-    // Origin is 28 bits: the low 4 live in the _L register and the upper 24 in
-    // the _H register (include/gba/io_reg.h). The previous version read these
-    // the wrong way round, so every texture sample landed at (0, 0).
-    int32_t originX = ((int32_t)((uint32_t)io_read16(REG_OFFSET_BG2X_H) << 20)
-                       | (io_read16(REG_OFFSET_BG2X_L) & 0xFFF));
-    int32_t originY = ((int32_t)((uint32_t)io_read16(REG_OFFSET_BG2Y_H) << 20)
-                       | (io_read16(REG_OFFSET_BG2Y_L) & 0xFFF));
+    // Origin is a 28-bit signed value split across two 16-bit registers: the
+    // game writes the low half to _L and the next 16 bits to _H (see
+    // PanFadeAndZoomScreen in src/intro.c). Reassemble as (H << 16) | L and
+    // sign-extend from bit 27. Reading _H as the top 24 bits instead put the
+    // origin in entirely the wrong place.
+    int32_t originX = (int32_t)(((uint32_t)io_read16(REG_OFFSET_BG2X_H) << 16)
+                                | (uint32_t)io_read16(REG_OFFSET_BG2X_L));
+    int32_t originY = (int32_t)(((uint32_t)io_read16(REG_OFFSET_BG2Y_H) << 16)
+                                | (uint32_t)io_read16(REG_OFFSET_BG2Y_L));
     if (originX & 0x08000000) // the hardware treats these as signed 28-bit
         originX |= ~0x0FFFFFFF;
     if (originY & 0x08000000)

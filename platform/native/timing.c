@@ -174,6 +174,18 @@ bool native_timing_run_interrupt(void)
             void native_video_render(void);
             bool native_input_poll(void);
             void native_timing_note_frame(void);
+            volatile uint16_t *io = (volatile uint16_t *)NATIVE_IO;
+
+            // Run the rest of VBlank with VCOUNT parked at the first VBlank line.
+            //
+            // ProcessDma3Requests (called from VBlankIntr) services the deferred
+            // VRAM and palette copies, and gives up once VCOUNT passes 224. The
+            // clock thread advances VCOUNT independently, so leaving it wherever
+            // it happened to be made those loads drop out on some frames and the
+            // picture came out partially drawn and flickering. VBlank runs from
+            // line 160, so hold VCOUNT at 160 for the duration.
+            uint16_t saved = io[REG_OFFSET_VCOUNT / 2];
+            io[REG_OFFSET_VCOUNT / 2] = NATIVE_VBLANK_START;
 
             // Poll input before rendering so a key pressed during this VBlank is
             // visible to the game's main loop, which runs after WaitForVBlank
@@ -184,6 +196,8 @@ bool native_timing_run_interrupt(void)
             native_ppu_render_frame();
             native_video_render();
             native_timing_note_frame();
+
+            io[REG_OFFSET_VCOUNT / 2] = saved;
         }
         return true;
     }
