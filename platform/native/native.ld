@@ -32,7 +32,20 @@ SECTIONS
     . = ALIGN(4096);
     .rodata : { *(.rodata .rodata.*) *(.gnu.linkonce.r.*) }
     . = ALIGN(4096);
-    .data : { *(.data .data.*) *(.ewram_data) *(.common_data) *(.got .got.plt) }
+    /* .got must be writable and page-aligned: the dynamic loader writes
+     * resolved addresses into it at load time. Folding it into .data made the
+     * GOT land in the read-only RELRO region after relocation, so lazy PLT
+     * resolution silently failed and calls reached the wrong symbol. */
+    /* .rela.plt must exist as its own section: it is what JMPREL points at,
+     * and it is where the 70 R_AARCH64_JUMP_SLOT relocations live. Letting it
+     * merge into .rela.dyn left the loader with no PLT relocation table, so
+     * PLT slots were never filled in and calls landed on whatever the stub
+     * happened to point at. */
+    .rela.dyn : { *(.rela.dyn) }
+    .rela.plt : { *(.rela.plt) }
+    .got : { *(.got .got.plt) }
+    . = ALIGN(4096);
+    .data : { *(.data .data.*) *(.ewram_data) *(.common_data) }
     . = ALIGN(4096);
     .bss : { *(.bss .bss.*) *(.bss.code) *(COMMON) }
     /DISCARD/ : { *(.ARM.attributes) *(.comment) }

@@ -82,88 +82,11 @@ static void set_error(const char *fmt, ...)
 }
 
 
-// Direct syscall wrappers. See sys_mmap() for why libc's PLT is bypassed.
-static long sys_call(long n, long a0, long a1, long a2, long a3, long a4, long a5)
-{
-    register long x0 __asm__("x0") = a0;
-    register long x1 __asm__("x1") = a1;
-    register long x2 __asm__("x2") = a2;
-    register long x3 __asm__("x3") = a3;
-    register long x4 __asm__("x4") = a4;
-    register long x5 __asm__("x5") = a5;
-    register long x8 __asm__("x8") = n;
-    __asm__ volatile("svc 0"
-                     : "+r"(x0)
-                     : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8)
-                     : "memory", "cc");
-    return x0;
-}
-
-#define SYS_openat 56
-#define SYS_close 57
-#define SYS_fstat 80
-#define SYS_ftruncate 46
-#define SYS_msync 26
-#define SYS_munmap 215
-#define SYS_read 63
-
-// Path string passed to openat() must live on a page that is mapped; our own
-// .bss is fine.
-static int sys_open_ro(const char *path)
-{
-    return (int)sys_call(SYS_openat, -100 /*AT_FDCWD*/, (long)path,
-                         O_RDONLY | O_CLOEXEC, 0, 0, 0);
-}
-
-static int sys_open_rw(const char *path, int flags, mode_t mode)
-{
-    return (int)sys_call(SYS_openat, -100 /*AT_FDCWD*/, (long)path, flags, (long)mode, 0, 0);
-}
-
-static int sys_fstat(int fd, struct stat *st)
-{
-    return (int)sys_call(SYS_fstat, fd, (long)st, 0, 0, 0, 0);
-}
-
-static int sys_ftruncate(int fd, off_t len)
-{
-    return (int)sys_call(SYS_ftruncate, fd, (long)len, 0, 0, 0, 0);
-}
-
-static int sys_close(int fd)
-{
-    return (int)sys_call(SYS_close, fd, 0, 0, 0, 0, 0);
-}
-
-// Issue the mmap syscall directly.
-//
-// Going through libc's mmap() depends on a PLT stub whose GOT slot must match
-// the R_AARCH64_JUMP_SLOT relocation; getting that wrong makes the call land in
-// fopen() with mmap's arguments, which faults. The syscall number is stable on
-// aarch64 (SYS_mmap == 222) and needs no relocation at all, so it cannot be
-// misdirected.
-static long sys_mmap(uintptr_t addr, size_t len, uint32_t prot, uint32_t flags, int fd,
-                     off_t off)
-{
-    register long x0 __asm__("x0") = (long)addr;
-    register long x1 __asm__("x1") = (long)len;
-    register long x2 __asm__("x2") = (long)prot;
-    register long x3 __asm__("x3") = (long)flags;
-    register long x4 __asm__("x4") = (long)fd;
-    register long x5 __asm__("x5") = (long)off;
-    register long x8 __asm__("x8") = 222; // __NR_mmap on aarch64
-    __asm__ volatile("svc 0"
-                     : "+r"(x0)
-                     : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8)
-                     : "memory", "cc");
-    return x0;
-}
-
 // Map `len` bytes of anonymous memory at `base`.
 static void *map_region(uint32_t base, size_t len)
 {
-    void *p = (void *)sys_mmap((uintptr_t)base, len, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    void *p = mmap((void *)(uintptr_t)base, len, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (p == MAP_FAILED)
     {
         native_log("mmap 0x%08x len=0x%zx failed: %s", base, len, strerror(errno));
@@ -180,7 +103,7 @@ static void *map_region(uint32_t base, size_t len)
 // and never reach the file on disk.
 static uint8_t *map_rom(const char *rom_path)
 {
-    int fd = sys_open_ro(rom_path);
+    int fd = open(rom_path, O_RDONLY);
     if (fd < 0)
     {
         set_error("cannot open ROM '%s': %s", rom_path, strerror(errno));
@@ -188,24 +111,23 @@ static uint8_t *map_rom(const char *rom_path)
     }
 
     struct stat st;
-    if (sys_fstat(fd, &st) != 0)
+    if (fstat(fd, &st) != 0)
     {
         set_error("cannot stat ROM: %s", strerror(errno));
-        sys_close(fd);
+        close(fd);
         return NULL;
     }
     if ((size_t)st.st_size < NATIVE_ROM_SIZE)
     {
         set_error("ROM is %lld bytes, expected at least %u", (long long)st.st_size,
                   NATIVE_ROM_SIZE);
-        sys_close(fd);
+        close(fd);
         return NULL;
     }
 
-    void *p = (void *)sys_mmap((uintptr_t)NATIVE_ROM_BASE, NATIVE_ROM_SIZE,
-                               PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_FIXED_NOREPLACE, fd, 0);
-    sys_close(fd);
+    void *p = mmap((void *)(uintptr_t)NATIVE_ROM_BASE, NATIVE_ROM_SIZE,
+                   PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED_NOREPLACE, fd, 0);
+    close(fd);
     if (p == MAP_FAILED)
     {
         set_error("cannot map ROM at 0x%08x: %s", NATIVE_ROM_BASE, strerror(errno));
@@ -220,7 +142,7 @@ static uint8_t *map_rom(const char *rom_path)
 // unchanged.
 static uint8_t *map_flash(const char *save_path)
 {
-    int fd = sys_open_rw(save_path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+    int fd = open(save_path, O_RDWR | O_CREAT, 0644);
     if (fd < 0)
     {
         set_error("cannot open save '%s': %s", save_path, strerror(errno));
@@ -228,32 +150,31 @@ static uint8_t *map_flash(const char *save_path)
     }
 
     struct stat st;
-    if (sys_fstat(fd, &st) != 0)
+    if (fstat(fd, &st) != 0)
     {
         set_error("cannot stat save: %s", strerror(errno));
-        sys_close(fd);
+        close(fd);
         return NULL;
     }
 
     // A shared file mapping only covers whole pages that exist in the file.
     // A fresh (or short) save would map successfully yet SIGBUS on every
     // access, so make the file exactly the flash size first.
-    if (sys_ftruncate(fd, (off_t)NATIVE_FLASH_SIZE) != 0)
+    if (ftruncate(fd, (off_t)NATIVE_FLASH_SIZE) != 0)
     {
         set_error("cannot size save to %u bytes: %s", NATIVE_FLASH_SIZE, strerror(errno));
         close(fd);
         return NULL;
     }
 
-    void *p = (void *)sys_mmap((uintptr_t)NATIVE_FLASH_BASE, NATIVE_FLASH_SIZE,
-                               PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *p = mmap((void *)(uintptr_t)NATIVE_FLASH_BASE, NATIVE_FLASH_SIZE,
+                   PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (p == MAP_FAILED)
     {
         // Fall back to a private anonymous region so the game still runs
         // (saves simply will not persist).
-        p = (void *)sys_mmap((uintptr_t)NATIVE_FLASH_BASE, NATIVE_FLASH_SIZE,
-                             PROT_READ | PROT_WRITE,
-                             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        p = mmap((void *)(uintptr_t)NATIVE_FLASH_BASE, NATIVE_FLASH_SIZE,
+                 PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     }
     close(fd);
     if (p == MAP_FAILED)
