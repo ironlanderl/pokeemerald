@@ -95,11 +95,17 @@ void CpuFastSet(const void *src, void *dest, u32 control)
 
 // The BIOS stores the compressed length in the top 3 bytes of the first word.
 // Callers in this codebase always pass a header word, so read it and skip it.
+// The compressed blob starts with a 32-bit header: byte 0 is the algorithm
+// tag, bytes 1..3 the decompressed length, big-endian.
+// The compressed blob starts with a 32-bit header: byte 0 is the algorithm tag
+// (0x10 for LZ77) and bytes 1..3 hold the decompressed size. The size is stored
+// low byte first -- matching the encoder in tools/gbagfx/lz.c, which writes
+// dest[1] = size, dest[2] = size >> 8, dest[3] = size >> 16 and reads it back
+// as (src[3] << 16) | (src[2] << 8) | src[1].
 static u32 ReadCompressedLength(const u32 *src)
 {
-    u32 header = *src;
-    u32 len = header >> 8;
-    return len ? len : (header >> 8);
+    const u8 *b = (const u8 *)src;
+    return ((u32)b[3] << 16) | ((u32)b[2] << 8) | (u32)b[1];
 }
 
 void LZ77UnCompWram(const u32 *src, void *dest)
@@ -112,7 +118,8 @@ void LZ77UnCompWram(const u32 *src, void *dest)
     while (written < len)
     {
         u8 flags = *p++;
-        for (int bit = 0; bit < 8 && written < len; bit++)
+        // Flag bits are consumed most-significant first.
+        for (int bit = 7; bit >= 0 && written < len; bit--)
         {
             if (!(flags & (1 << bit)))
             {
@@ -125,6 +132,11 @@ void LZ77UnCompWram(const u32 *src, void *dest)
                 u8 b2 = *p++;
                 u32 offset = (((b1 & 0xF) << 8) | b2) + 1;
                 u32 length = (b1 >> 4) + 3;
+                // A back-reference before the start of the output would read
+                // outside the destination and fault. Malformed or truncated
+                // data can produce one; clamp rather than fault.
+                if (offset > written)
+                    offset = written ? written : 1;
                 const u8 *src_pos = d - offset;
                 for (u32 i = 0; i < length && written < len; i++)
                 {

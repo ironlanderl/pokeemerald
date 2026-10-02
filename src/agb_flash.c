@@ -42,7 +42,13 @@ do {                             \
 // behaves exactly as it does on hardware.
 u16 ReadFlashId(void)
 {
-    return 0;
+    // IdentifyFlash() scans sSetupInfos for a matching chip id and treats the
+    // first entry with makerId == 0 as "not found". Reporting 0 therefore makes
+    // it exit with failure, and AgbMain then clears the main callback, leaving
+    // the game on a blank screen. Return the id of MX29L010, the first entry in
+    // the table, so the normal "flash present" path is taken and the save
+    // machinery is wired up.
+    return 0x09C2; // MX29L010: maker 0xC2, device 0x09 (src/agb_flash_mx.c)
 }
 #else
 u16 ReadFlashId(void)

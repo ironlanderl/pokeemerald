@@ -595,6 +595,23 @@ static void RenderScanline(int y)
 
 void native_ppu_render_frame(void)
 {
+    // TEMP diagnostic
+    {
+        static int n = 0;
+        if (n < 200)
+        {
+            uint16_t d = io_read16(0x00);
+            native_log("ppu: DISPCNT=0x%04x BG0CNT=0x%04x BG1CNT=0x%04x BG2CNT=0x%04x BG3CNT=0x%04x pal0=%04x",
+                       d, io_read16(0x08), io_read16(0x0A), io_read16(0x0C), io_read16(0x0E),
+                       pal_read16(0));
+            native_log("ppu: vram[0..7]=%02x %02x %02x %02x %02x %02x %02x %02x",
+                       vram_read8(0),vram_read8(1),vram_read8(2),vram_read8(3),
+                       vram_read8(4),vram_read8(5),vram_read8(6),vram_read8(7));
+            native_log("ppu: frame=%d vcount=%u cycles=%llu", n,
+                       native_vcount(), (unsigned long long)native_cycle_count());
+        }
+        n++;
+    }
     memset(s_layer_color, 0, sizeof(s_layer_color));
     memset(s_obj_priority, 0xFF, sizeof(s_obj_priority));
     memset(s_obj_index, OBJ_NONE, sizeof(s_obj_index));
