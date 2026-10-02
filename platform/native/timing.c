@@ -204,9 +204,16 @@ static void TickScanline(uint8_t line)
 // this does is run the game's handler when the flag arrives.
 void native_timing_advance_to_next_vblank(void)
 {
-    while (!(__atomic_load_n(&s_if, __ATOMIC_SEQ_CST) & INTR_FLAG_VBLANK))
+    // The clock thread raises INTR_FLAG_VBLANK independently, so waiting on the
+    // flag and then dispatching is racy: the flag can be observed before the
+    // pending bit is visible to run_interrupt, or run_interrupt can be entered
+    // between the check and the dispatch. Instead dispatch repeatedly until the
+    // game's own intrCheck flag is set -- that is set only by VBlankIntr, so it
+    // is the real completion signal.
+    while (!(gMain.intrCheck & INTR_FLAG_VBLANK))
+    {
         native_timing_run_interrupt();
-    native_timing_run_interrupt(); // dispatch the VBlank handler itself
+    }
 }
 
 // --- Interrupt enable/acknowledge, used by src/gpu_regs.c and src/m4a.c ---

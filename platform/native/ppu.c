@@ -56,7 +56,13 @@ enum
 
 // One entry per layer per pixel, used to resolve OBJ priority and blending.
 static uint16_t s_layer_color[DISPLAY_HEIGHT][DISPLAY_WIDTH][NUM_LAYERS];
-static uint8_t s_layer_opaque[DISPLAY_HEIGHT][DISPLAY_WIDTH];
+
+// Priority (0..3) and OAM index of the sprite that currently owns each pixel.
+// On hardware the sprite with the lowest OAM index wins among those sharing
+// the lowest priority value, so both are needed to resolve a pixel.
+static uint8_t s_obj_priority[DISPLAY_HEIGHT][DISPLAY_WIDTH];
+static uint8_t s_obj_index[DISPLAY_HEIGHT][DISPLAY_WIDTH];
+#define OBJ_NONE 0xFF
 
 // Final RGBA output, uploaded to a GL texture by video.c.
 static uint32_t s_framebuffer[DISPLAY_HEIGHT][DISPLAY_WIDTH];
@@ -312,10 +318,19 @@ static void DrawSpritePixel(int x, int y, int oamIndex, bool *wrote, uint16_t *c
 
     uint16_t color = pal_read16(OBJ_PLTT_SIZE + paletteNum * 32 + index * 2);
 
-    // Priority: lower value wins, and only among already-drawn opaque sprites.
-    if (s_layer_opaque[y][x] && s_layer_color[y][x][LAYER_OBJ] != 0
-        && (s_layer_color[y][x][LAYER_OBJ] & 0x8000))
-        return;
+    // Hardware OBJ priority: lower priority value wins; ties go to the
+    // lower OAM index. We iterate OAM in order, so a later sprite must be
+    // strictly better to replace what is already there.
+    if (s_obj_index[y][x] != OBJ_NONE)
+    {
+        if (priority > s_obj_priority[y][x])
+            return;
+        if (priority == s_obj_priority[y][x] && oamIndex > s_obj_index[y][x])
+            return;
+    }
+
+    s_obj_priority[y][x] = (uint8_t)priority;
+    s_obj_index[y][x] = (uint8_t)oamIndex;
 
     *wrote = true;
     *colorOut = color;
@@ -446,35 +461,47 @@ static void RenderScanline(int y)
     for (int x = 0; x < DISPLAY_WIDTH; x++)
     {
         uint16_t bgColor[4] = {0, 0, 0, 0};
+        int bgIndex = -1;
 
         // Backdrop everywhere.
         uint16_t color = s_backdrop;
 
-        for (int i = 0; i < 4; i++)
+        // BGs composite by their BGCNT priority (lowest wins), not by index.
+        // Ties go to the lower BG number.
+        for (int prio = 0; prio < 4; prio++)
         {
-            uint16_t on = 0;
-            switch (i)
+            for (int i = 0; i < 4; i++)
             {
-            case 0: on = DISPCNT_BG0_ON; break;
-            case 1: on = DISPCNT_BG1_ON; break;
-            case 2: on = DISPCNT_BG2_ON; break;
-            case 3: on = DISPCNT_BG3_ON; break;
+                uint16_t on = 0;
+                switch (i)
+                {
+                case 0: on = DISPCNT_BG0_ON; break;
+                case 1: on = DISPCNT_BG1_ON; break;
+                case 2: on = DISPCNT_BG2_ON; break;
+                case 3: on = DISPCNT_BG3_ON; break;
+                }
+                if (!(dispcnt & on))
+                    continue;
+                if (native_ppu_layer_visible[i] == false)
+                    continue;
+                if ((bgcnt[i] & BGCNT_PRIORITY_MASK) != (uint16_t)prio)
+                    continue;
+
+                uint16_t c;
+                if (i == 2 && affineBg2)
+                    c = DrawAffineBg2Pixel(x, y, bgcnt[2]);
+                else
+                    c = DrawTextBgPixel(i, x, y, bgcnt[i]);
+
+                bgColor[i] = c;
+                // Index 0 is transparent in the tile; the first non-zero
+                // layer drawn at the winning priority becomes the visible BG.
+                if (c != 0 && bgIndex < 0)
+                {
+                    bgIndex = i;
+                    color = c;
+                }
             }
-            if (!(dispcnt & on))
-                continue;
-            if (native_ppu_layer_visible[i] == false)
-                continue;
-
-            uint16_t c;
-            if (i == 2 && affineBg2)
-                c = DrawAffineBg2Pixel(x, y, bgcnt[2]);
-            else
-                c = DrawTextBgPixel(i, x, y, bgcnt[i]);
-
-            bgColor[i] = c;
-            // Higher-numbered layers have lower priority; draw back to front.
-            if (c != 0)
-                color = c;
         }
 
         // Sprites.
@@ -549,7 +576,8 @@ static void RenderScanline(int y)
 void native_ppu_render_frame(void)
 {
     memset(s_layer_color, 0, sizeof(s_layer_color));
-    memset(s_layer_opaque, 0, sizeof(s_layer_opaque));
+    memset(s_obj_priority, 0xFF, sizeof(s_obj_priority));
+    memset(s_obj_index, OBJ_NONE, sizeof(s_obj_index));
 
     for (int y = 0; y < DISPLAY_HEIGHT; y++)
         RenderScanline(y);
