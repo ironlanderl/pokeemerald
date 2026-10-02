@@ -133,6 +133,17 @@ static const char str_checkMbootLL[] = "RFU-MBOOT";
 
 u16 rfu_initializeAPI(u32 *APIBuffer, u16 buffByteSize, IntrFunc *sioIntrTable_p, bool8 copyInterruptToRam)
 {
+#if PLATFORM_NATIVE
+    // The RFU stack copies its own ARM code into IWRAM and installs a
+    // Thumb entry pointer (fastCopyPtr = buffer + 1), which is not executable on
+    // a host. There is no link cable in this port, so report failure and let
+    // InitRFUAPI take its existing error path.
+    (void)APIBuffer;
+    (void)buffByteSize;
+    (void)sioIntrTable_p;
+    (void)copyInterruptToRam;
+    return 1;
+#else
     u16 i;
     u16 *dst;
     const u16 *src;
@@ -197,6 +208,7 @@ u16 rfu_initializeAPI(u32 *APIBuffer, u16 buffByteSize, IntrFunc *sioIntrTable_p
 #endif
     gRfuFixed->fastCopyPtr = (void *)gRfuFixed->fastCopyBuffer + 1;
     return 0;
+#endif // PLATFORM_NATIVE
 }
 
 static void rfu_STC_clearAPIVariables(void)

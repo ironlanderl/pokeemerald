@@ -484,7 +484,7 @@ void LoadSaveblockObjEventScripts(void)
     s32 i;
 
     for (i = 0; i < OBJECT_EVENT_TEMPLATES_COUNT; i++)
-        savObjTemplates[i].script = SAVE_PTR_TO(SAVE_PTR_FROM(mapHeaderObjTemplates[i].script));
+        savObjTemplates[i].script = (uptr32)mapHeaderObjTemplates[i].script;
 }
 
 void SetObjEventTemplateCoords(u8 localId, s16 x, s16 y)

@@ -2491,7 +2491,7 @@ static void OverrideObjectEventTemplateScript(const struct ObjectEvent *objectEv
 
     objectEventTemplate = GetBaseTemplateForObjectEvent(objectEvent);
     if (objectEventTemplate)
-        objectEventTemplate->script = SAVE_PTR_TO(script);
+        objectEventTemplate->script = (uptr32)script;
 }
 
 void TryOverrideTemplateCoordsForObjectEvent(const struct ObjectEvent *objectEvent, u8 movementType)

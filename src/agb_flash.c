@@ -34,6 +34,17 @@ do {                             \
         ;                        \
 } while (0)
 
+#if PLATFORM_NATIVE
+// ReadFlashId normally ARM-copies ReadFlash1 into a stack buffer and
+// calls it at offset +1 (the Thumb bit), which a host cannot execute.
+// Report the "ID of 0" entry instead: that is how DefaultFlash
+// terminates the search in IdentifyFlash, so the rest of the driver
+// behaves exactly as it does on hardware.
+u16 ReadFlashId(void)
+{
+    return 0;
+}
+#else
 u16 ReadFlashId(void)
 {
     u16 flashId;
@@ -61,6 +72,7 @@ u16 ReadFlashId(void)
 
     return flashId;
 }
+#endif
 
 void FlashTimerIntr(void)
 {
@@ -136,6 +148,17 @@ void ReadFlash_Core(vu8 *src, u8 *dest, u32 size)
     }
 }
 
+#if PLATFORM_NATIVE
+// Same ARM-copy trick as ReadFlashId; read the mapped save directly instead.
+void ReadFlash(u16 sectorNum, u32 offset, u8 *dest, u32 size)
+{
+    const u8 *src = FLASH_BASE + (sectorNum << gFlash->sector.shift) + offset;
+    u32 i;
+
+    for (i = 0; i < size; i++)
+        dest[i] = src[i];
+}
+#else
 void ReadFlash(u16 sectorNum, u32 offset, u8 *dest, u32 size)
 {
     u8 *src;
@@ -171,6 +194,7 @@ void ReadFlash(u16 sectorNum, u32 offset, u8 *dest, u32 size)
 
     readFlash_Core(src, dest, size);
 }
+#endif
 
 u32 VerifyFlashSector_Core(u8 *src, u8 *tgt, u32 size)
 {

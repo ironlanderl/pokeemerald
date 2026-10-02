@@ -39,9 +39,11 @@ typedef uint32_t uptr32;
 #define SAVE_PTR_TO(p) ((uptr32)(uintptr_t)(const void *)(p))
 #define SAVE_PTR_FROM(x) ((const u8 *)(uintptr_t)(x))
 #else
+// On the GBA uptr32 is an ordinary const pointer and both helpers are the
+// identity, so the ROM build's generated code is unchanged.
 typedef const u8 *uptr32;
 #define SAVE_PTR_TO(p) ((const u8 *)(p))
-#define SAVE_PTR_FROM(x) ((x))
+#define SAVE_PTR_FROM(x) ((void *)(x))
 #endif
 
 typedef u8  bool8;

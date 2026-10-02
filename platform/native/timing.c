@@ -18,16 +18,35 @@
 #include <stdint.h>
 #include <stdio.h>
 
-// Set by the interrupt dispatcher and consumed by WaitForVBlank.
-static uint8_t s_vcount;
+// The scanline, published by the clock thread and read by the game (m4aSoundInit
+// busy-waits for 159, ProcessDma3Requests compares against 224). Declared
+// volatile so the compiler reloads it rather than caching it in a register.
+static volatile uint8_t s_vcount;
 static uint64_t s_cycles;
 static bool s_enabled;
 static bool s_shutdown_requested;
 
 // Cached interrupt state, mirroring REG_IE / REG_IF / REG_IME.
+//
+// s_if is raised by the clock thread and acknowledged by the game thread, so
+// every read-modify-write has to be atomic or an interrupt can be lost (or a
+// stale bit replayed). The IE/IME pair are only written by the game and only
+// read by it, so they need no synchronisation.
 static volatile uint16_t s_ie;
 static volatile uint16_t s_if;
 static volatile uint16_t s_ime;
+
+// Atomic set/clear of the pending-interrupt flags: the clock thread raises
+// them and the game thread acknowledges them.
+static inline void if_raise(uint16_t bits)
+{
+    __atomic_fetch_or(&s_if, bits, __ATOMIC_SEQ_CST);
+}
+
+static inline void if_clear(uint16_t bits)
+{
+    __atomic_fetch_and(&s_if, (uint16_t)~bits, __ATOMIC_SEQ_CST);
+}
 
 void native_timing_init(void)
 {
@@ -76,7 +95,7 @@ uint64_t native_cycle_count(void)
 static void PublishVcount(void)
 {
     volatile uint8_t *io = (volatile uint8_t *)NATIVE_IO;
-    io[0x04] = s_vcount; // REG_OFFSET_VCOUNT
+    io[0x06] = s_vcount; // REG_OFFSET_VCOUNT (not 0x04, which is DISPSTAT)
 }
 
 // Interrupt bits, matching constants/gba_constants.inc.
@@ -111,7 +130,15 @@ static const uint16_t sIntrPriority[] = {
 // Returns true if a handler ran.
 bool native_timing_run_interrupt(void)
 {
-    uint16_t pending = (uint16_t)(s_ie & s_if & 0x3FFF);
+    // The game writes REG_IE / REG_IME / REG_IF directly in the emulated IO
+    // page rather than through this module, so read the authoritative values
+    // back out of memory before deciding what is pending.
+    volatile uint16_t *io = (volatile uint16_t *)NATIVE_IO;
+    s_ie = io[REG_OFFSET_IE / 2];
+    s_ime = io[REG_OFFSET_IME / 2];
+    if_clear(io[REG_OFFSET_IF / 2]);
+
+    uint16_t pending = (uint16_t)(s_ie & __atomic_load_n(&s_if, __ATOMIC_SEQ_CST) & 0x3FFF);
     if (!s_ime || pending == 0)
         return false;
 
@@ -121,11 +148,14 @@ bool native_timing_run_interrupt(void)
         if (!(pending & flag))
             continue;
 
-        s_if &= (uint16_t)~flag; // acknowledge
+        if_clear(flag); // acknowledge
 
         IntrFunc fn = gIntrTable[i];
         if (fn)
             fn();
+
+        // Acknowledge in the IO page too, so the game's own reads agree.
+        *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_IF) = __atomic_load_n(&s_if, __ATOMIC_SEQ_CST);
 
         // VBlank is where the real hardware scans out the frame, and where
         // AgbMain's WaitForVBlank unblocks. Render and present here so the
@@ -158,14 +188,14 @@ static void TickScanline(uint8_t line)
 
     // VCOUNT interrupt: the game programs DISPSTAT for line 150 at boot.
     if (line == 150)
-        s_if |= INTR_FLAG_VCOUNT;
+        if_raise(INTR_FLAG_VCOUNT);
 
     // VBlank starts at line 160.
     if (line == NATIVE_VBLANK_START)
-        s_if |= INTR_FLAG_VBLANK;
+        if_raise(INTR_FLAG_VBLANK);
 
     // HBlank fires once per scanline while the game asks for it.
-    s_if |= INTR_FLAG_HBLANK;
+    if_raise(INTR_FLAG_HBLANK);
 
     native_timing_run_interrupt();
 }
@@ -174,7 +204,7 @@ static void TickScanline(uint8_t line)
 // this does is run the game's handler when the flag arrives.
 void native_timing_advance_to_next_vblank(void)
 {
-    while (!(s_if & INTR_FLAG_VBLANK))
+    while (!(__atomic_load_n(&s_if, __ATOMIC_SEQ_CST) & INTR_FLAG_VBLANK))
         native_timing_run_interrupt();
     native_timing_run_interrupt(); // dispatch the VBlank handler itself
 }
@@ -203,17 +233,17 @@ uint16_t native_timing_get_ime(void)
 
 void native_timing_raise(uint16_t flags)
 {
-    s_if |= flags;
+    if_raise(flags);
 }
 
 uint16_t native_timing_get_if(void)
 {
-    return s_if;
+    return __atomic_load_n(&s_if, __ATOMIC_SEQ_CST);
 }
 
 void native_timing_ack(uint16_t flags)
 {
-    s_if &= (uint16_t)~flags;
+    if_clear(flags);
 }
 // ---------------------------------------------------------------------------
 // Frame clock
@@ -255,11 +285,15 @@ static void *clock_main(void *arg)
             s_vcount = 0;
         s_cycles += NATIVE_CYCLES_PER_SCANLINE;
 
+        // Raise the interrupt sources for this scanline and publish IF, which
+        // is where the game reads it (native_timing_run_interrupt reads it back
+        // out of the IO page).
+        if_raise(INTR_FLAG_HBLANK);
         if (line == 150)
-            s_if |= INTR_FLAG_VCOUNT;
+            if_raise(INTR_FLAG_VCOUNT);
         if (line == NATIVE_VBLANK_START)
-            s_if |= INTR_FLAG_VBLANK;
-        s_if |= INTR_FLAG_HBLANK;
+            if_raise(INTR_FLAG_VBLANK);
+        *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_IF) = __atomic_load_n(&s_if, __ATOMIC_SEQ_CST);
 
         long ns = (long)kNsPerScanline;
         next.tv_nsec += ns;

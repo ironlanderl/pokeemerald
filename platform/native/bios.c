@@ -25,16 +25,20 @@
 // not a host's -- so a plain function of this name is what callers need.
 void CpuSet(const void *src, void *dest, u32 control)
 {
-    u32 flags = control >> 24;
-    bool fill = (flags & 4) != 0;
-    bool word = (flags & 1) != 0;
+    // Control word (include/gba/syscall.h):
+    //   bit 24  CPU_SET_SRC_FIXED  -- store src's *value*, don't copy from it
+    //   bit 26  CPU_SET_32BIT      -- 32-bit words; otherwise 16-bit
+    //   bits 0-20  element count
+    bool fixed = (control & 0x01000000) != 0;
+    bool word = (control & 0x04000000) != 0;
     u32 count = control & 0x1FFFFF;
 
     if (word)
     {
         u32 *d = (u32 *)dest;
-        if (fill)
+        if (fixed)
         {
+            // CpuFill32 passes the value by address; take the value itself.
             u32 v = *(const u32 *)src;
             for (u32 i = 0; i < count; i++)
                 d[i] = v;
@@ -49,7 +53,7 @@ void CpuSet(const void *src, void *dest, u32 control)
     else
     {
         u16 *d = (u16 *)dest;
-        if (fill)
+        if (fixed)
         {
             u16 v = *(const u16 *)src;
             for (u32 i = 0; i < count; i++)
@@ -67,19 +71,19 @@ void CpuSet(const void *src, void *dest, u32 control)
 // CpuFastSet: always 32-bit. See CpuSet for why the macro is disabled natively.
 void CpuFastSet(const void *src, void *dest, u32 control)
 {
+    bool fixed = (control & 0x01000000) != 0;
     u32 count = control & 0x1FFFFF;
     u32 *d = (u32 *)dest;
-    const u32 *s = (const u32 *)src;
 
-    if (control & (1 << 24)) // fill
+    if (fixed)
     {
-        u32 v = *s;
+        u32 v = *(const u32 *)src;
         for (u32 i = 0; i < count; i++)
             d[i] = v;
     }
     else
     {
-        // The BIOS copies in blocks of 8 words; match the observable result.
+        const u32 *s = (const u32 *)src;
         for (u32 i = 0; i < count; i++)
             d[i] = s[i];
     }

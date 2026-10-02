@@ -351,15 +351,24 @@ struct MusicPlayerInfo
 
 struct MusicPlayer
 {
-    struct MusicPlayerInfo *info;
-    struct MusicPlayerTrack *track;
+    // This table is assembled into the ROM by sound/music_player_table.inc,
+    // where each entry is 4+4+1+1pad+2 = 12 bytes. On a 64-bit host real
+    // pointers are 8 bytes, which would double the struct size and misalign
+    // every entry after the first. Keep them 32-bit so the native build reads
+    // the ROM table with the same stride the GBA does; both targets are
+    // reachable from 32 bits (see uptr32).
+    uptr32 info;
+    uptr32 track;
     u8 numTracks;
     u16 unk_A;
 };
 
 struct Song
 {
-    struct SongHeader *header;
+    // gSongTable is assembled into the ROM (sound/song_table.inc) with a
+    // 4+2+2 = 8 byte stride. Keep the pointer 32-bit for the same reason as
+    // struct MusicPlayer above.
+    uptr32 header;
     u16 ms;
     u16 me;
 };

@@ -61,6 +61,7 @@ void native_log(const char *fmt, ...)
     vfprintf(stderr, fmt, ap);
     va_end(ap);
     fputc('\n', stderr);
+    fflush(stderr);
 }
 
 static void set_error(const char *fmt, ...)
@@ -143,14 +144,22 @@ static uint8_t *map_flash(const char *save_path)
         return NULL;
     }
 
-    // Flash chips are sector-addressed; present the full size so a short save
-    // still reads back as blank rather than faulting.
+    // A shared file mapping only covers whole pages that exist in the file.
+    // A fresh (or short) save would map successfully yet SIGBUS on every
+    // access, so make the file exactly the flash size first.
+    if (ftruncate(fd, (off_t)NATIVE_FLASH_SIZE) != 0)
+    {
+        set_error("cannot size save to %u bytes: %s", NATIVE_FLASH_SIZE, strerror(errno));
+        close(fd);
+        return NULL;
+    }
+
     void *p = mmap((void *)(uintptr_t)NATIVE_FLASH_BASE, NATIVE_FLASH_SIZE,
                    PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (p == MAP_FAILED)
     {
-        // File is shorter than the window: fall back to a private anonymous
-        // region so the game still runs (saves simply won't persist).
+        // Fall back to a private anonymous region so the game still runs
+        // (saves simply will not persist).
         p = mmap((void *)(uintptr_t)NATIVE_FLASH_BASE, NATIVE_FLASH_SIZE,
                  PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     }

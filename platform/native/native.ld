@@ -1,8 +1,14 @@
 /* Native linker script for the pokeemerald Linux port.
  *
- * Native code lives at 0x10000000, above the emulated GBA window
- * (0x02000000..0x09000000), so it cannot collide with the mmap'd EWRAM,
- * IWRAM, VRAM, OAM, palette RAM, ROM or flash regions.
+ * Native code is placed at 0x40000000: above the emulated GBA window
+ * (0x02000000..0x09000000), so it cannot collide with the mmap'd EWRAM, IWRAM,
+ * VRAM, OAM, palette RAM, ROM or flash regions.
+ *
+ * The whole image must stay below 4 GiB. ROM-resident data stores absolute
+ * 32-bit pointers to native symbols -- gMPlayTable holds &gMPlayInfo_BGM, for
+ * example -- so anything above 0x100000000 truncates to garbage when read back
+ * as a ROM word. The load image is roughly 15 MiB, so 0x40000000 leaves ample
+ * room and still clears the GBA window.
  */
 ENTRY(native_main)
 
@@ -14,7 +20,7 @@ gNumMusicPlayers = 4;
 gMaxLines = 0;
 SECTIONS
 {
-    . = 0x10000000;
+    . = 0x40000000;
     .text : { *(.text.startup) *(.text .text.*) }
     . = ALIGN(4096);
     .rodata : { *(.rodata .rodata.*) }

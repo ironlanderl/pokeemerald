@@ -23,6 +23,8 @@ static GLuint s_program;
 static GLint s_uniform_tex;
 static GLuint s_vao;
 
+static uint16_t s_keyinput = 0x03FF; // active low: a set bit means released
+
 static const char *kVertexShader =
     "#version 130\n"
     "in vec2 aPos;\n"
@@ -145,6 +147,12 @@ bool native_video_init(int scale)
 
     native_log("video: %dx%d window, GL %s", DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale,
                (const char *)glGetString(GL_VERSION));
+
+    // Publish the initial key state immediately. The game polls REG_KEYINPUT
+    // during boot (the A+B+Start+Select soft-reset check runs in the main loop)
+    // and would otherwise read 0, which is "every key pressed".
+    *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_KEYINPUT) = s_keyinput;
+
     return true;
 }
 
@@ -176,8 +184,6 @@ void native_video_shutdown(void)
 // ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
-
-static uint16_t s_keyinput = 0x03FF; // active low, all released
 
 static uint16_t TranslateScancode(SDL_Scancode sc)
 {

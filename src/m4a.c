@@ -82,8 +82,9 @@ void m4aSoundInit(void)
 
     for (i = 0; i < NUM_MUSIC_PLAYERS; i++)
     {
-        struct MusicPlayerInfo *mplayInfo = gMPlayTable[i].info;
-        MPlayOpen(mplayInfo, gMPlayTable[i].track, gMPlayTable[i].numTracks);
+        // gMPlayTable is ROM-resident data with 32-bit pointer fields.
+        struct MusicPlayerInfo *mplayInfo = SAVE_PTR_FROM(gMPlayTable[i].info);
+        MPlayOpen(mplayInfo, SAVE_PTR_FROM(gMPlayTable[i].track), gMPlayTable[i].numTracks);
         mplayInfo->unk_B = gMPlayTable[i].unk_A;
         mplayInfo->memAccArea = gMPlayMemAccArea;
     }
@@ -109,9 +110,12 @@ void m4aSongNumStart(u16 n)
     const struct MusicPlayer *mplayTable = gMPlayTable;
     const struct Song *songTable = gSongTable;
     const struct Song *song = &songTable[n];
+    // mplayTable is ROM data: on native builds its pointer fields are 32-bit,
+    // so unwrap once here rather than at every mplay->info use.
+    struct MusicPlayerInfo *const mplayInfo = SAVE_PTR_FROM(mplayTable[song->ms].info);
     const struct MusicPlayer *mplay = &mplayTable[song->ms];
 
-    MPlayStart(mplay->info, song->header);
+    MPlayStart(mplayInfo, SAVE_PTR_FROM(song->header));
 }
 
 void m4aSongNumStartOrChange(u16 n)
@@ -119,18 +123,21 @@ void m4aSongNumStartOrChange(u16 n)
     const struct MusicPlayer *mplayTable = gMPlayTable;
     const struct Song *songTable = gSongTable;
     const struct Song *song = &songTable[n];
+    // mplayTable is ROM data: on native builds its pointer fields are 32-bit,
+    // so unwrap once here rather than at every mplay->info use.
+    struct MusicPlayerInfo *const mplayInfo = SAVE_PTR_FROM(mplayTable[song->ms].info);
     const struct MusicPlayer *mplay = &mplayTable[song->ms];
 
-    if (mplay->info->songHeader != song->header)
+    if (mplayInfo->songHeader != SAVE_PTR_FROM(song->header))
     {
-        MPlayStart(mplay->info, song->header);
+        MPlayStart(mplayInfo, SAVE_PTR_FROM(song->header));
     }
     else
     {
-        if ((mplay->info->status & MUSICPLAYER_STATUS_TRACK) == 0
-         || (mplay->info->status & MUSICPLAYER_STATUS_PAUSE))
+        if ((mplayInfo->status & MUSICPLAYER_STATUS_TRACK) == 0
+         || (mplayInfo->status & MUSICPLAYER_STATUS_PAUSE))
         {
-            MPlayStart(mplay->info, song->header);
+            MPlayStart(mplayInfo, SAVE_PTR_FROM(song->header));
         }
     }
 }
@@ -140,14 +147,17 @@ static void UNUSED m4aSongNumStartOrContinue(u16 n)
     const struct MusicPlayer *mplayTable = gMPlayTable;
     const struct Song *songTable = gSongTable;
     const struct Song *song = &songTable[n];
+    // mplayTable is ROM data: on native builds its pointer fields are 32-bit,
+    // so unwrap once here rather than at every mplay->info use.
+    struct MusicPlayerInfo *const mplayInfo = SAVE_PTR_FROM(mplayTable[song->ms].info);
     const struct MusicPlayer *mplay = &mplayTable[song->ms];
 
-    if (mplay->info->songHeader != song->header)
-        MPlayStart(mplay->info, song->header);
-    else if ((mplay->info->status & MUSICPLAYER_STATUS_TRACK) == 0)
-        MPlayStart(mplay->info, song->header);
-    else if (mplay->info->status & MUSICPLAYER_STATUS_PAUSE)
-        MPlayContinue(mplay->info);
+    if (mplayInfo->songHeader != SAVE_PTR_FROM(song->header))
+        MPlayStart(mplayInfo, SAVE_PTR_FROM(song->header));
+    else if ((mplayInfo->status & MUSICPLAYER_STATUS_TRACK) == 0)
+        MPlayStart(mplayInfo, SAVE_PTR_FROM(song->header));
+    else if (mplayInfo->status & MUSICPLAYER_STATUS_PAUSE)
+        MPlayContinue(mplayInfo);
 }
 
 void m4aSongNumStop(u16 n)
@@ -155,10 +165,13 @@ void m4aSongNumStop(u16 n)
     const struct MusicPlayer *mplayTable = gMPlayTable;
     const struct Song *songTable = gSongTable;
     const struct Song *song = &songTable[n];
+    // mplayTable is ROM data: on native builds its pointer fields are 32-bit,
+    // so unwrap once here rather than at every mplay->info use.
+    struct MusicPlayerInfo *const mplayInfo = SAVE_PTR_FROM(mplayTable[song->ms].info);
     const struct MusicPlayer *mplay = &mplayTable[song->ms];
 
-    if (mplay->info->songHeader == song->header)
-        m4aMPlayStop(mplay->info);
+    if (mplayInfo->songHeader == SAVE_PTR_FROM(song->header))
+        m4aMPlayStop(mplayInfo);
 }
 
 static void UNUSED m4aSongNumContinue(u16 n)
@@ -166,10 +179,13 @@ static void UNUSED m4aSongNumContinue(u16 n)
     const struct MusicPlayer *mplayTable = gMPlayTable;
     const struct Song *songTable = gSongTable;
     const struct Song *song = &songTable[n];
+    // mplayTable is ROM data: on native builds its pointer fields are 32-bit,
+    // so unwrap once here rather than at every mplay->info use.
+    struct MusicPlayerInfo *const mplayInfo = SAVE_PTR_FROM(mplayTable[song->ms].info);
     const struct MusicPlayer *mplay = &mplayTable[song->ms];
 
-    if (mplay->info->songHeader == song->header)
-        MPlayContinue(mplay->info);
+    if (mplayInfo->songHeader == SAVE_PTR_FROM(song->header))
+        MPlayContinue(mplayInfo);
 }
 
 void m4aMPlayAllStop(void)
@@ -177,7 +193,7 @@ void m4aMPlayAllStop(void)
     s32 i;
 
     for (i = 0; i < NUM_MUSIC_PLAYERS; i++)
-        m4aMPlayStop(gMPlayTable[i].info);
+        m4aMPlayStop(SAVE_PTR_FROM(gMPlayTable[i].info));
 
     for (i = 0; i < MAX_POKEMON_CRIES; i++)
         m4aMPlayStop(&gPokemonCryMusicPlayers[i]);
@@ -193,7 +209,7 @@ void m4aMPlayAllContinue(void)
     s32 i;
 
     for (i = 0; i < NUM_MUSIC_PLAYERS; i++)
-        MPlayContinue(gMPlayTable[i].info);
+        MPlayContinue(SAVE_PTR_FROM(gMPlayTable[i].info));
 
     for (i = 0; i < MAX_POKEMON_CRIES; i++)
         MPlayContinue(&gPokemonCryMusicPlayers[i]);

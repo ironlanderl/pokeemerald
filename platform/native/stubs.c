@@ -84,9 +84,17 @@ void TrackStop(struct MusicPlayerInfo *mplayInfo, struct MusicPlayerTrack *track
     (void)track;
 }
 
+// m4a's channel command handlers reach the mixer through gMPlayJumpTable, which
+// MPlayJumpTableCopy fills with 36 pointers taken from a template in the ROM.
+// The ARM original (src/m4a_1.s) reads the template address out of a literal
+// pool and copies 0x24 words; the entries themselves are already patched to
+// native addresses by the loader, so the copy is a straight memcpy.
+const u32 *const gMPlayJumpTableTemplatePtr = (const u32 *)(uintptr_t)0x086759E0;
+
 void MPlayJumpTableCopy(MPlayFunc *mplayJumpTable)
 {
-    (void)mplayJumpTable;
+    for (int i = 0; i < 36; i++)
+        mplayJumpTable[i] = (MPlayFunc)gMPlayJumpTableTemplatePtr[i];
 }
 
 void m4aSoundVSync(void)

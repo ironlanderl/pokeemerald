@@ -315,6 +315,17 @@ void ResetLinkRfuGFLayer(void)
 
 void InitRFU(void)
 {
+#if PLATFORM_NATIVE
+    // The RFU stack initialises shared RFU state that the wireless/indicator
+    // sprite code reads later, so the buffers are still zeroed. Everything past
+    // that drives the link cable, which this port does not implement, and
+    // depends on gSTWIStatus being set up by rfu_initializeAPI -- which the
+    // native stub in librfu_rfu.c deliberately skips.
+    CpuFill16(0, gSendCmd, sizeof gSendCmd);
+    CpuFill16(0, gRecvCmds, sizeof gRecvCmds);
+    CpuFill16(0, gLinkPlayers, sizeof gLinkPlayers);
+    return;
+#endif
     IntrFunc serialIntr = gIntrTable[1];
     IntrFunc timerIntr = gIntrTable[2];
     InitRFUAPI();

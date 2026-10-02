@@ -539,7 +539,10 @@ int main(int argc, char **argv)
                 }
 
                 struct sym *tgt = sym_intern(elf, nm);
-                tgt->global = true; // REL targets are always global bindings
+                // Binding comes from the object's symbol table; a relocation
+                // can equally name a static function (IntrDummy and friends).
+                tgt->global = (ELF32_ST_BIND(syms[si].st_info) == STB_GLOBAL
+                               || ELF32_ST_BIND(syms[si].st_info) == STB_WEAK);
                 patch_add(sec_base + rels[k].r_offset, tgt);
                 patched++;
             }
@@ -592,7 +595,7 @@ fprintf(f, "\n/* Native symbols referenced by the table below. */\n");
     for (size_t i = 0; i < g_syms_len; i++)
     {
         struct sym *sy = g_syms[i];
-        if (sy->global && !addr_is_rom(sy->addr))
+        if (sy->global && (!addr_is_rom(sy->addr) || sy->native_defined))
             fprintf(f, "extern char %s[];\n", sy->name);
     }
 
@@ -600,8 +603,10 @@ fprintf(f, "\n/* Native symbols referenced by the table below. */\n");
 for (size_t i = 0; i < g_syms_len; i++)
 {
     struct sym *s = g_syms[i];
-    if (addr_is_rom(s->addr))
+    bool rom_only = addr_is_rom(s->addr) && !(s->native_defined && s->global);
+    if (rom_only)
     {
+        // Still ROM-resident: the native build reads it in place.
         fprintf(f, "0x%08lxul, /* %s (in ROM) */\n", (unsigned long)s->addr, s->name);
     }
     else if (s->global)
