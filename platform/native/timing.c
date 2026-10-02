@@ -307,6 +307,7 @@ static void *clock_main(void *arg)
             if_raise(INTR_FLAG_VBLANK);
         *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_IF) = __atomic_load_n(&s_if, __ATOMIC_SEQ_CST);
 
+
         long ns = (long)kNsPerScanline;
         next.tv_nsec += ns;
         while (next.tv_nsec >= 1000000000L)

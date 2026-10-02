@@ -268,10 +268,17 @@ void BgAffineSet(struct BgAffineSrcData *src, struct BgAffineDstData *dest, s32 
 // affine-transformed sprite needs, writing `offset` u32 slots apart.
 void ObjAffineSet(struct ObjAffineSrcData *src, void *dest, s32 count, s32 offset)
 {
-    u32 *d = (u32 *)dest;
+    // The destination is a struct OamMatrix -- four s16 (a, b, c, d) -- and
+    // `offset` is the stride between entries in units of 4 bytes, so an entry
+    // is 8 bytes wide and the stride advances by offset * 4. Writing the
+    // eight boundary values the hardware computes instead overruns the
+    // caller's buffer, which is what tripped the stack canary.
+    u8 *base = (u8 *)dest;
 
-    for (s32 i = 0; i < count; i++, d += offset, src++)
+    for (s32 i = 0; i < count; i++, src++)
     {
+        s16 *d = (s16 *)(base + (size_t)i * (size_t)offset * 4);
+
         // rotation is 8.8 radians, matching the BIOS's fixed-point angle.
         double ang = (double)(src->rotation & 0xFFFF) / 256.0;
         s32 cosv = (s32)(cos(ang) * 256.0);
@@ -279,23 +286,10 @@ void ObjAffineSet(struct ObjAffineSrcData *src, void *dest, s32 count, s32 offse
         s32 xScale = (s32)src->xScale * 0x100;
         s32 yScale = (s32)src->yScale * 0x100;
 
-        s32 pa = cosv * xScale;
-        s32 pb = -sinv * yScale;
-        s32 pc = sinv * xScale;
-        s32 pd = cosv * yScale;
-
-        // Half-extents of the sprite quad, in screen space.
-        s32 cx = 16 << 8;
-        s32 cy = 16 << 8;
-
-        d[0] = (u32)((pa * -cx + pb * -cy) >> 8);
-        d[1] = (u32)((pc * -cx + pd * -cy) >> 8);
-        d[2] = (u32)((pa * cx + pb * -cy) >> 8);
-        d[3] = (u32)((pc * cx + pd * -cy) >> 8);
-        d[4] = (u32)((pa * -cx + pb * cy) >> 8);
-        d[5] = (u32)((pc * -cx + pd * cy) >> 8);
-        d[6] = (u32)((pa * cx + pb * cy) >> 8);
-        d[7] = (u32)((pc * cx + pd * cy) >> 8);
+        d[0] = (s16)((cosv * xScale) >> 8);  // a
+        d[1] = (s16)((-sinv * yScale) >> 8); // b
+        d[2] = (s16)((sinv * xScale) >> 8);  // c
+        d[3] = (s16)((cosv * yScale) >> 8);  // d
     }
 }
 

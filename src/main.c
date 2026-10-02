@@ -167,13 +167,6 @@ void AgbMain(void)
 
         PlayTimeCounter_Update();
         MapMusicMain();
-#if PLATFORM_NATIVE
-        { static int m = 0;
-          if (m < 6)
-              native_log("main: loop %d cb1=%p state=%d", m,
-                         (void *)gMain.callback1, gMain.state);
-          m++; }
-#endif
         WaitForVBlank();
 
 #if PLATFORM_NATIVE
