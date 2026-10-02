@@ -23,10 +23,16 @@ SECTIONS
     . = 0x40000000;
     /* Scrt1.o supplies _start, which calls main(); main is this port's. */
     .text : { *(.text.startup) *(.init) *(.text .text.*) }
+
+    /* The dynamic-linker sections must be laid out exactly as the default
+     * script does. R_AARCH64_JUMP_SLOT relocations record offsets into .got.plt,
+     * and a hand-rolled layout leaves ld emitting PLT stubs that index the wrong
+     * slot -- which showed up as mmap() calling fopen() with its arguments. */
+    .plt : { *(.plt .plt.*) *(.iplt) }
     . = ALIGN(4096);
-    .rodata : { *(.rodata .rodata.*) }
+    .rodata : { *(.rodata .rodata.*) *(.gnu.linkonce.r.*) }
     . = ALIGN(4096);
-    .data : { *(.data .data.*) *(.ewram_data) *(.common_data) }
+    .data : { *(.data .data.*) *(.ewram_data) *(.common_data) *(.got .got.plt) }
     . = ALIGN(4096);
     .bss : { *(.bss .bss.*) *(.bss.code) *(COMMON) }
     /DISCARD/ : { *(.ARM.attributes) *(.comment) }
