@@ -39,7 +39,6 @@ SDL_LIBS   := $(shell pkg-config --libs sdl2 gl)
 CFLAGS := -O2 -g \
   -iquote $(ROOT)/include \
   -iquote $(CURDIR) \
-  -I $(ROOT)/include \
   -DMODERN=1 -DPLATFORM_NATIVE=1 \
   -fno-strict-aliasing -fno-strict-overflow \
   -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
@@ -128,7 +127,7 @@ $(OUT)/rom_patches.o: $(OUT)/rom_patches.c
 # Two stages, matching the ROM build: cpp, then tools/preproc (which expands
 # INCGFX/INCBIN into byte arrays and converts text via charmap.txt), then cc.
 $(OUT)/src/%.o: $(ROOT)/src/%.c | dirs
-	@$(CC) -E -iquote $(ROOT)/include -iquote $(CURDIR) -I $(ROOT)/include \
+	@$(CC) -E -iquote $(ROOT)/include -iquote $(CURDIR) \
 	   -DMODERN=1 -DPLATFORM_NATIVE=1 -Wno-trigraphs $< -o $(OUT)/src/$*.i
 	@# preproc resolves INCGFX/INCBIN paths relative to its working directory,
 	@# which must be the repo root (the ROM build runs from there too).

@@ -1,24 +1,6 @@
 #ifndef GUARD_STRINGS_H
 #define GUARD_STRINGS_H
 
-// On a native (non-GBA) build this header is reached by <string.h> (line 462 of
-// the libc header pulls in <strings.h>) before global.h has defined the GBA
-// integer types, so every declaration below would fail with "unknown type
-// name u8". Provide the types locally and then chain to the real libc header so
-// both sets of declarations are available.
-//
-// PLATFORM_NATIVE is defined only by the native Linux build (see
-// platform/native/Makefile); the ROM build is unaffected.
-#if defined(PLATFORM_NATIVE)
-typedef unsigned char u8;
-typedef signed char s8;
-typedef unsigned short u16;
-typedef signed short s16;
-typedef unsigned int u32;
-typedef signed int s32;
-#include_next <strings.h>
-#endif
-
 // Placeholders
 extern const u8 gText_ExpandedPlaceholder_Empty[];
 extern const u8 gText_ExpandedPlaceholder_Kun[];
