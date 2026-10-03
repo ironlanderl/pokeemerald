@@ -219,6 +219,7 @@ bool native_video_init(int scale)
     native_log("video: %dx%d window, GL %s", DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale,
                (const char *)glGetString(GL_VERSION));
 
+    return true;
 }
 
 void native_video_render(void)
