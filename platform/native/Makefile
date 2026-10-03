@@ -116,7 +116,10 @@ $(OUT)/rom_syms.h $(OUT)/rom_patches.c $(OUT)/rom_syms.S: $(ROMPATCH) \
 		$(OUT)/native_syms.txt $(OUT)/native_syms.txt \
 		$(OUT)/rom_syms.h $(OUT)/rom_patches.c $(OUT)/rom_syms.S
 
-$(OUT)/rom_syms.o: $(OUT)/rom_syms.S
+# Recompile whenever the generated assembly changes. Editing rom_syms.S by hand
+# used to leave a stale .o that still lacked the symbols, producing confusing
+# "undefined reference" errors for data that was plainly in the .S.
+$(OUT)/rom_syms.o: $(OUT)/rom_syms.S native.ld
 	$(CC) -c -x assembler-with-cpp -o $@ $<
 
 $(OUT)/rom_patches.o: $(OUT)/rom_patches.c

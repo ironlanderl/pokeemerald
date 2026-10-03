@@ -400,7 +400,13 @@ static void STWI_init_slave(void)
 // return; on a native build a plain C stub does the same thing.
 #if defined(PLATFORM_NATIVE)
 
-static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)(void))
+// The forward declarations above pick the parameter type from __STDC_VERSION__,
+// so these definitions must match whichever form was declared.
+#if __STDC_VERSION__ < 202311L
+static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)())
+#else
+static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)(...))
+#endif
 {
 }
 
