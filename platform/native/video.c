@@ -13,7 +13,13 @@
 #include "global.h"
 #include "native.h"
 
-#include <GL/gl.h>
+// GLEW, not <GL/gl.h>: the system header only declares OpenGL 1.1, so every
+// shader entry point (glCreateShader and friends) comes out as an implicit
+// declaration -- a warning on older GCC and a hard error from GCC 14 onward.
+// GLEW exposes the modern entry points and resolves them at run time, which also
+// copes with drivers that only offer a compatibility profile.
+#define GL_GLEXT_PROTOTYPES 1
+#include <GL/glew.h>
 #include <string.h>
 
 static SDL_Window *s_window;
@@ -122,6 +128,20 @@ bool native_video_init(int scale)
         native_log("SDL_GL_CreateContext failed: %s", SDL_GetError());
         return false;
     }
+
+    // GLEW has to load the entry points itself, and that requires a current
+    // context, so it happens after SDL_GL_CreateContext.
+    glewExperimental = GL_TRUE;
+    GLenum glewStatus = glewInit();
+    if (glewStatus != GLEW_OK)
+    {
+        native_log("glewInit failed: %s", (const char *)glewGetErrorString(glewStatus));
+        return false;
+    }
+    // GLEW_ERROR_CHECKING is mutually exclusive with core profiles; clear the
+    // spurious error it can leave behind on a compatibility context.
+    glGetError();
+
     SDL_GL_SetSwapInterval(1); // vsync
 
     GLuint vs = CompileShader(GL_VERTEX_SHADER, kVertexShader);

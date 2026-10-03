@@ -31,8 +31,8 @@ else
   OBJDUMP := $(CC) -dumpversion
 endif
 
-SDL_CFLAGS := $(shell pkg-config --cflags sdl2 gl)
-SDL_LIBS   := $(shell pkg-config --libs sdl2 gl)
+SDL_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
+SDL_LIBS   := $(shell pkg-config --libs sdl2 glew)
 
 # The game code is GBA C. These flags mirror the ROM build's MODERN=1 settings,
 # with PLATFORM_NATIVE added to switch on the handful of host-specific paths.
@@ -42,6 +42,7 @@ CFLAGS := -O2 -g \
   -DMODERN=1 -DPLATFORM_NATIVE=1 \
   -fno-strict-aliasing -fno-strict-overflow \
   -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast \
+  -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
   $(SDL_CFLAGS)
 
 PREPROC := $(abspath $(ROOT)/tools/preproc/preproc)
@@ -123,7 +124,7 @@ $(OUT)/rom_syms.o: $(OUT)/rom_syms.S native.ld
 	$(CC) -c -x assembler-with-cpp -o $@ $<
 
 $(OUT)/rom_patches.o: $(OUT)/rom_patches.c
-	$(CC) -c -O1 -w -o $@ $<
+	$(CC) -c -O1 -o $@ $<
 
 # --- 3. compile --------------------------------------------------------------
 #

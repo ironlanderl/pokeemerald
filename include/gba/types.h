@@ -37,7 +37,12 @@ typedef double f64;
 #if defined(PLATFORM_NATIVE)
 typedef uint32_t uptr32;
 #define SAVE_PTR_TO(p) ((uptr32)(uintptr_t)(const void *)(p))
-#define SAVE_PTR_FROM(x) ((const u8 *)(uintptr_t)(x))
+// Convert back to an object pointer without asserting a concrete type: the
+// callers need struct MusicPlayerInfo *, struct SongHeader *, and so on, and
+// an intermediate void * converts to any of them implicitly. Casting straight
+// to `const u8 *` produced incompatible-pointer-type diagnostics at every use,
+// which GCC 14+ treats as an error.
+#define SAVE_PTR_FROM(x) ((void *)(uintptr_t)(x))
 #else
 // On the GBA uptr32 is an ordinary const pointer and both helpers are the
 // identity, so the ROM build's generated code is unchanged.
