@@ -111,11 +111,21 @@ $(OUT)/native_syms.txt: $(GAME_OBJS) $(PLAT_OBJS) $(NATIVE_EXTERN_SYMS)
 	@cat $(NATIVE_EXTERN_SYMS) >> $@
 	@sort -u -o $@ $@
 
-$(OUT)/rom_syms.h $(OUT)/rom_patches.c $(OUT)/rom_syms.S: $(ROMPATCH) \
-		$(ROOT)/pokeemerald.elf $(ROOT)/pokeemerald.map $(OUT)/native_syms.txt | dirs
+# Produce all three outputs together, stamped by a sentinel, so that a parallel
+# build cannot assemble rom_syms.o from the previous run's .S. With -j the old
+# multi-target rule let make satisfy rom_syms.o first and rompatch rewrite the
+# .S afterwards, leaving an object that was missing symbols the .S plainly
+# contained ("undefined reference to gText_ApprenticeWhichMon0").
+STAMP := $(OUT)/.rompatch.stamp
+
+$(STAMP): $(ROMPATCH) $(ROOT)/pokeemerald.elf $(ROOT)/pokeemerald.map $(OUT)/native_syms.txt | dirs
 	$(ROMPATCH) $(ROOT)/pokeemerald.elf $(ROOT)/pokeemerald.map $(ROOT)/build/emerald \
 		$(OUT)/native_syms.txt $(OUT)/native_syms.txt \
 		$(OUT)/rom_syms.h $(OUT)/rom_patches.c $(OUT)/rom_syms.S
+	@touch $@
+
+$(OUT)/rom_syms.h $(OUT)/rom_patches.c $(OUT)/rom_syms.S: $(STAMP)
+	@:  # generated together by the stamp rule above
 
 # Recompile whenever the generated assembly changes. Editing rom_syms.S by hand
 # used to leave a stale .o that still lacked the symbols, producing confusing

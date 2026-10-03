@@ -28,6 +28,7 @@ static GLuint s_texture;
 static GLuint s_program;
 static GLint s_uniform_tex;
 static GLuint s_vao;
+static bool s_glew_ok;
 
 static uint16_t s_keyinput = 0x03FF; // active low: a set bit means released
 static uint16_t s_injected;          // bits forced by native_input_inject
@@ -131,18 +132,34 @@ bool native_video_init(int scale)
 
     // GLEW has to load the entry points itself, and that requires a current
     // context, so it happens after SDL_GL_CreateContext.
+    // Not fatal: the offscreen/dummy drivers used for headless frame capture
+    // expose no usable GL, and those paths never draw through the shaders.
     glewExperimental = GL_TRUE;
     GLenum glewStatus = glewInit();
     if (glewStatus != GLEW_OK)
-    {
-        native_log("glewInit failed: %s", (const char *)glewGetErrorString(glewStatus));
-        return false;
-    }
+        native_log("glewInit failed (%s); continuing",
+                   (const char *)glewGetErrorString(glewStatus));
+    else
+        s_glew_ok = true;
     // GLEW_ERROR_CHECKING is mutually exclusive with core profiles; clear the
     // spurious error it can leave behind on a compatibility context.
     glGetError();
 
     SDL_GL_SetSwapInterval(1); // vsync
+
+    // Publish the initial key state before anything else can return. The game
+    // polls REG_KEYINPUT during boot (the A+B+Start+Select soft-reset check runs
+    // in the main loop) and would otherwise read 0, which is "every key held".
+    *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_KEYINPUT) = s_keyinput;
+
+    // Without GLEW there are no resolved shader entry points, so there is
+    // nothing to draw with. Leave the context alone and let the caller run
+    // frame-capture only; this is the headless/offscreen case.
+    if (!s_glew_ok)
+    {
+        native_log("GL unavailable; running without presentation");
+        return true;
+    }
 
     GLuint vs = CompileShader(GL_VERTEX_SHADER, kVertexShader);
     GLuint fs = CompileShader(GL_FRAGMENT_SHADER, kFragmentShader);
@@ -202,16 +219,13 @@ bool native_video_init(int scale)
     native_log("video: %dx%d window, GL %s", DISPLAY_WIDTH * scale, DISPLAY_HEIGHT * scale,
                (const char *)glGetString(GL_VERSION));
 
-    // Publish the initial key state immediately. The game polls REG_KEYINPUT
-    // during boot (the A+B+Start+Select soft-reset check runs in the main loop)
-    // and would otherwise read 0, which is "every key pressed".
-    *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_KEYINPUT) = s_keyinput;
-
-    return true;
 }
 
 void native_video_render(void)
 {
+    if (!s_glew_ok)
+        return;
+
     glBindTexture(GL_TEXTURE_2D, s_texture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, GL_RGBA,
                     GL_UNSIGNED_BYTE, native_ppu_framebuffer());

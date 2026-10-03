@@ -313,11 +313,18 @@ void RegisterRamReset(u32 resetFlags)
     if (resetFlags & 0x10) // RESET_OAM
         memset(NATIVE_OAM, 0, NATIVE_OAM_SIZE);
     if (resetFlags & 0x20) // RESET_SIO
-        memset(NATIVE_IO, 0, NATIVE_IO_SIZE);
+        // Only the serial registers reset. Zeroing the whole IO page would also
+        // clear KEYINPUT, which the game polls every frame; leaving it zero reads
+        // as "every button held" and trips the A+B+Start+Select soft-reset
+        // combination on the first pass through the main loop.
+        memset(NATIVE_IO + REG_OFFSET_SIODATA32, 0, 0x10);
     if (resetFlags & 0x40) // RESET_SOUND
         memset(NATIVE_IO + 0x60, 0, 0x50);
     if (resetFlags & 0x80) // RESET_ALL
-        memset(NATIVE_IO, 0, NATIVE_IO_SIZE);
+    {
+        memset(NATIVE_IO + REG_OFFSET_SIODATA32, 0, 0x10);
+        memset(NATIVE_IO + 0x60, 0, 0x50);
+    }
 }
 
 // SoftReset re-executes the cartridge entry point on real hardware. The native
