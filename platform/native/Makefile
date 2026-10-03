@@ -78,12 +78,37 @@ $(ROOT)/pokeemerald.gba $(ROOT)/pokeemerald.elf $(ROOT)/pokeemerald.map:
 $(ROMPATCH): $(ROOT)/tools/rompatch/rompatch.c | dirs
 	$(CC) -O2 -o $@ $< -lelf
 
-$(OUT)/native_syms.txt: $(GAME_OBJS) $(PLAT_OBJS)
-	@for f in $^; do nm --defined-only $$f 2>/dev/null | awk 'NF==3 {print $$3}'; done \
+# Symbols the native link already provides. Anything here must NOT also be
+# emitted as an absolute ROM address, or the native linker resolves calls to it
+# and jumps into the mapped ROM image instead -- which is exactly what
+# happened with strcpy.
+#
+# Derived from the host libc/SDL/GL rather than hand-listed: an earlier
+# hand-written list missed strcpy, and the game called into the ROM image and
+# died with SIGBUS the first time a real GL context made that path reachable.
+# Symbols the native link already provides. Anything here must NOT also be
+# emitted as an absolute ROM address, or the native linker resolves calls to it
+# and jumps into the mapped ROM image instead. That is what happened with
+# strcpy: the first hand-written exclusion list missed it, and the port died
+# with SIGBUS the moment a real GL context made the path reachable.
+#
+# Derived from the host libc and the SDL/GL libraries rather than hand-listed,
+# so this cannot silently drift out of date again.
+NATIVE_EXTERN_SYMS := $(OUT)/extern_syms.txt
+
+$(OUT)/extern_syms.txt: | dirs
+	@{ \
+	   nm -D --defined-only $$(ls /lib/*-linux-gnu/libc.so.6 2>/dev/null | head -1) 2>/dev/null; \
+	   for l in $$(pkg-config --libs-only-L sdl2 gl 2>/dev/null); do \
+	     nm -D --defined-only $$l/lib*.so* 2>/dev/null; \
+	   done; \
+	 } | awk 'NF==3 {sub(/@@.*$$/, "", $$3); print $$3}' | sort -u > $@
+
+$(OUT)/native_syms.txt: $(GAME_OBJS) $(PLAT_OBJS) $(NATIVE_EXTERN_SYMS)
+	@for f in $(GAME_OBJS) $(PLAT_OBJS); do \
+	   nm --defined-only $$f 2>/dev/null | awk 'NF==3 {print $$3}'; done \
 	  | sort -u > $@
-	@# The ROM also defines these, but the native link must use the host's
-	@# versions or every call site jumps into the mapped ROM image instead.
-	@printf 'strcmp\nmemcpy\nmemset\n' >> $@
+	@cat $(NATIVE_EXTERN_SYMS) >> $@
 	@sort -u -o $@ $@
 
 $(OUT)/rom_syms.h $(OUT)/rom_patches.c $(OUT)/rom_syms.S: $(ROMPATCH) \

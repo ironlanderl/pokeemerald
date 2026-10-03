@@ -76,14 +76,40 @@ bool native_video_init(int scale)
         return false;
     }
 
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    s_window = SDL_CreateWindow("pokeemerald (native)", SDL_WINDOWPOS_CENTERED,
-                                SDL_WINDOWPOS_CENTERED, DISPLAY_WIDTH * scale,
-                                DISPLAY_HEIGHT * scale, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    // Try a core profile first, then fall back. Remote displays (x2go, VNC) and
+    // some drivers expose only compatibility contexts, and asking for core
+    // there fails outright with "Couldn't find matching GLX visual".
+    //
+    // The shaders are written for GLSL 130, which is what both a 3.3 core
+    // context and a 3.0+ compatibility context accept.
+    static const struct
+    {
+        int major, minor, profile;
+    } kProfiles[] = {
+        {3, 3, SDL_GL_CONTEXT_PROFILE_CORE},
+        {3, 0, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY},
+        {2, 1, 0}, // last resort: GLSL 120, so rewrite the shaders
+    };
+
+    s_window = NULL;
+    for (size_t i = 0; i < sizeof(kProfiles) / sizeof(kProfiles[0]); i++)
+    {
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, kProfiles[i].major);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, kProfiles[i].minor);
+        if (kProfiles[i].profile)
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, kProfiles[i].profile);
+        else
+            SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, 0);
+
+        s_window = SDL_CreateWindow("pokeemerald (native)", SDL_WINDOWPOS_CENTERED,
+                                    SDL_WINDOWPOS_CENTERED, DISPLAY_WIDTH * scale,
+                                    DISPLAY_HEIGHT * scale,
+                                    SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+        if (s_window)
+            break;
+    }
     if (!s_window)
     {
         native_log("SDL_CreateWindow failed: %s", SDL_GetError());
