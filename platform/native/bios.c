@@ -251,10 +251,18 @@ void BgAffineSet(struct BgAffineSrcData *src, struct BgAffineDstData *dest, s32 
         s32 sx = src->sx << 8;
         s32 sy = src->sy << 8;
 
-        dest->pa = (s16)((src->alpha * src->sy) / sy);
-        dest->pb = (s16)(-(src->alpha * src->sx) / sx);
-        dest->pc = (s16)(-(src->alpha * src->texY) / sy);
-        dest->pd = (s16)((src->alpha * src->texX) / sx);
+        // The BIOS returns 0 for a zero divisor, and the game relies on it:
+        // PanFadeAndZoomScreen is called with a zoom of 0 at the start and end of
+        // the intro's fade. Recompiled for the host the divide becomes a real CPU
+        // divide, so a zero divisor raises SIGFPE -- which is what the intro crash
+        // was. Divide by 1 instead, which yields 0 for every term.
+        s32 dsx = sx ? sx : 1;
+        s32 dsy = sy ? sy : 1;
+
+        dest->pa = (s16)((src->alpha * src->sy) / dsy);
+        dest->pb = (s16)(-(src->alpha * src->sx) / dsx);
+        dest->pc = (s16)(-(src->alpha * src->texY) / dsy);
+        dest->pd = (s16)((src->alpha * src->texX) / dsx);
 
         dest->dx = (src->texX * 0x10000) - (dest->pa * src->scrX) - (dest->pb * src->scrY);
         dest->dy = (src->texY * 0x10000) - (dest->pc * src->scrX) - (dest->pd * src->scrY);
