@@ -34,6 +34,17 @@ endif
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 glew)
 SDL_LIBS   := $(shell pkg-config --libs sdl2 glew)
 
+# Passing native.ld with -T replaces ld's default linker script, and with it the
+# SEARCH_DIR list saying where libraries live. ld then cannot find the transitive
+# dependencies of the SDL/GL libraries -- libGLdispatch, libGLX, libxcb and
+# libstdc++, none of which carry an RPATH -- and the link dies with "undefined
+# reference" for their symbols. -L does not help: it only governs libraries named
+# on the command line, not indirect ones. -rpath-link is the option that governs
+# that lookup. The directory comes from pkg-config so it tracks the layout of
+# whichever machine builds this: /usr/lib on a single-prefix distro, the multiarch
+# directory on a Debian derivative.
+RPATH_LINK := -Wl,-rpath-link,$(shell pkg-config --variable=libdir sdl2)
+
 # The game code is GBA C. These flags mirror the ROM build's MODERN=1 settings,
 # with PLATFORM_NATIVE added to switch on the handful of host-specific paths.
 CFLAGS := -O2 -g \
@@ -94,11 +105,20 @@ $(ROMPATCH): $(ROOT)/tools/rompatch/rompatch.c | dirs
 #
 # Derived from the host libc and the SDL/GL libraries rather than hand-listed,
 # so this cannot silently drift out of date again.
+#
+# Ask $(CC) where libc.so.6 is rather than globbing for it. The list used to be
+# read from /lib/*-linux-gnu/libc.so.6, which only exists on a Debian-style
+# multiarch layout; anywhere else `ls` failed, `nm` was handed no file, and the
+# exclusion list came out EMPTY -- silently, because the pipeline's `2>/dev/null`
+# swallowed the error. That put memcpy, memset, strcmp and strcpy back into the
+# ROM as absolute addresses, and the binary died in a std::locale constructor
+# during static init, before main(): libstdc++ called memset and jumped into the
+# mapped ROM's ARM code at 0x082e9435.
 NATIVE_EXTERN_SYMS := $(OUT)/extern_syms.txt
 
 $(OUT)/extern_syms.txt: | dirs
 	@{ \
-	   nm -D --defined-only $$(ls /lib/*-linux-gnu/libc.so.6 2>/dev/null | head -1) 2>/dev/null; \
+	   nm -D --defined-only "$$($(CC) -print-file-name=libc.so.6)" 2>/dev/null; \
 	   for l in $$(pkg-config --libs-only-L sdl2 gl 2>/dev/null); do \
 	     nm -D --defined-only $$l/lib*.so* 2>/dev/null; \
 	   done; \
@@ -159,7 +179,7 @@ $(OUT)/$(TARGET): $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) | native.ld
 # the normal Scrt1.o provides _start, which runs the constructors libc needs
 # (including SDL's) before main() forwards to native_main with a real argc/argv.
 	$(CC) -no-pie -T native.ld -o $@ $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) \
-	   -lc -lm -lpthread $(SDL_LIBS)
+	   -lc -lm -lpthread $(SDL_LIBS) $(RPATH_LINK)
 	@echo "built $@"
 
 run: all
