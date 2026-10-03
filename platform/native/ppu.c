@@ -275,7 +275,8 @@ static void DrawSpritePixel(int x, int y, int oamIndex, bool *wrote, uint16_t *c
     int tileNum = w2 & 0x03FF;
     int priority = (w2 >> 10) & 3;
     int paletteNum = (w2 >> 12) & 0xF;
-    int affineParam = w3;
+    // GBATEK: the affine parameter is a signed 8-bit value.
+    int affineParam = (int)(int8_t)(w3 & 0xFF);
 
     if (shape == 3)
         return; // prohibited
@@ -308,10 +309,13 @@ static void DrawSpritePixel(int x, int y, int oamIndex, bool *wrote, uint16_t *c
     }
     else if (affineMode == 1 || affineMode == 3)
     {
-        // Affine: centre of the sprite maps to the centre of the OAM matrix
-        // texture (the 128x128 cell at index matrixNum).
-        int cx = w / 2, cy = h / 2;
-        int32_t dx = px - cx, dy = py - cy;
+        // Affine sprites take their position from the matrix cell's own origin
+        // plus affineParam (the 8-bit signed offset stored in OAM), not from the
+        // centre of the 128x128 cell. Using the centre put every affine sprite
+        // in the middle of its cell, which is why scaled sprites appeared in the
+        // wrong place.
+        int32_t dx = px - affineParam;
+        int32_t dy = py - affineParam;
 
         volatile uint16_t *m = (volatile uint16_t *)(OAM_BASE + 64 * 8 + matrixNum * 32);
         int32_t pa = (int32_t)(short)m[0];
@@ -322,9 +326,9 @@ static void DrawSpritePixel(int x, int y, int oamIndex, bool *wrote, uint16_t *c
         int32_t sx = (pa * dx + pb * dy) >> 8;
         int32_t sy = (pc * dx + pd * dy) >> 8;
 
-        // The result is relative to the centre of the 128x128 matrix cell.
-        px = (int)(sx + 64);
-        py = (int)(sy + 64);
+        // Offsets are signed 8-bit relative to the cell origin.
+        px = (int)sx;
+        py = (int)sy;
 
         if (px < 0 || px >= 128 || py < 0 || py >= 128)
             return;
@@ -536,13 +540,34 @@ static void RenderScanline(int y)
         }
 
         // Sprites.
+        //
+        // A sprite with objMode == 2 (ST_OAM_OBJ_WINDOW) is not drawn itself. It
+        // is an opaque region that selects which layers the object window
+        // reveals, via the WINOBJ_* bits of WININ/WINOUT. The title screen draws
+        // its logo entirely this way, so without it nothing appears.
         uint16_t objColor = 0;
+        bool objWindowHit = false;
         if ((dispcnt & DISPCNT_OBJ_ON) && native_ppu_layer_visible[LAYER_OBJ])
         {
             for (int i = 0; i < 128; i++)
             {
-                bool wrote = false;
+                volatile uint32_t *oam = (volatile uint32_t *)(OAM_BASE + i * 8);
+                int mode = (int)((oam[0] >> 10) & 3);
+                bool dummy;
                 uint16_t c = 0;
+
+                if (mode == 2) // ST_OAM_OBJ_WINDOW
+                {
+                    // Only opaque pixels of the mask sprite count.
+                    DrawSpritePixel(x, y, i, &dummy, &c);
+                    if (dummy)
+                        objWindowHit = true;
+                    continue;
+                }
+                if (mode == 3) // prohibited
+                    continue;
+
+                bool wrote = false;
                 DrawSpritePixel(x, y, i, &wrote, &c);
                 if (wrote)
                     objColor = c;
@@ -580,6 +605,23 @@ static void RenderScanline(int y)
         if (!(bgMask & (1u << 2))) bgColor[2] = 0;
         if (!(bgMask & (1u << 3))) bgColor[3] = 0;
         if (!objEnabled) objColor = 0;
+
+        // Object window. Where a mask sprite covers this pixel, the layers
+        // chosen by the WINOBJ_* bits replace what the normal windows selected.
+        //
+        // WINOBJ_BG0..BG3 live at bits 8..11, WINOBJ_OBJ at 12 and WINOBJ_CLR at
+        // 13 -- but that half of the register belongs to WINOBJ regardless of
+        // which of win0/win1/outside we are in, so take it from WININ for windows
+        // and WINOUT otherwise.
+        if ((dispcnt & DISPCNT_OBJWIN_ON) && objWindowHit)
+        {
+            uint16_t objMaskSrc = (inW0 || inW1) ? winin : winout;
+            for (int i = 0; i < 4; i++)
+                if (!((objMaskSrc >> 8) & (1u << i)))
+                    bgColor[i] = 0;
+            if (!((objMaskSrc >> 12) & 1u))
+                objColor = 0;
+        }
 
         // Compose, then blend.
         //
