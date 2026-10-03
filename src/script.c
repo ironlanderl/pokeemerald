@@ -103,11 +103,13 @@ bool8 RunScriptCommand(struct ScriptContext *ctx)
             if (ctx->scriptPtr == gNullScriptPtr)
             {
 #if defined(PLATFORM_NATIVE)
-                // The GBA halts the CPU in hardware and wakes it on an
-                // interrupt. There is nothing to wait for here, and the `svc 2`
-                // below is an ARM instruction the host assembler rejects, so spin.
-                while (1)
-                    ;
+                // On the GBA `svc 2` (HALT) parks the CPU until an interrupt
+                // arrives. Here there is nothing to wake it, and an ARM
+                // instruction is not valid anyway, so treat the null script as
+                // finished rather than spinning -- an empty `while (1)` here
+                // would hang the frame loop outright.
+                ctx->mode = SCRIPT_MODE_STOPPED;
+                return FALSE;
 #else
                 while (1)
                     asm("svc 2"); // HALT
