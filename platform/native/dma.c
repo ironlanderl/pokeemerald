@@ -35,7 +35,12 @@
 #define DMA_START_HBLANK 0x00002000u
 #define DMA_ENABLE 0x00008000u
 
-#define DMA_BASE 0x040000B0u
+// Offset of DMA0's registers within the IO page (REG_OFFSET_DMA0SAD in
+// include/gba/io_reg.h). This must be a page-relative offset because the accessors
+// already add NATIVE_IO: with the full address 0x040000B0 here, the sum landed at
+// 0x080000B0 -- inside the mapped ROM -- so every DMA control read came from the
+// wrong place and no transfer ever ran.
+#define DMA_BASE 0x000000B0u
 #define DMA_STRIDE 0x00Cu
 
 // Read the four 32-bit registers of DMA channel n.
