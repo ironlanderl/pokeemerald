@@ -5,7 +5,7 @@
 // The game arms DMA by writing raw registers -- src/dma3_manager.c,
 // src/palette.c and src/scanline_effect.c all go through the DmaSet() macro in
 // include/gba/macro.h, which pokes REG_ADDR_DMA0CNT and friends. On hardware
-// the transfer happens immediately (for DMA_START_NOW) or once per HBlank/VBlank
+// the transfer happens immediately (for DMAW_START_NOW) or once per HBlank/VBlank
 // (for the repeating modes).
 //
 // The IO page is ordinary mapped memory here, so a write to the control
@@ -26,24 +26,24 @@
 // in bits 0-15. These constants therefore carry the <<16, unlike the REG_DMAxCNT_H
 // spellings they come from -- testing the unshifted masks against the live word
 // reads the count instead of the flags and rejects every channel.
-#define DMA_DEST_INC 0x00000000u
-#define DMA_DEST_DEC 0x00200000u
-#define DMA_DEST_FIXED 0x00400000u
-#define DMA_DEST_RELOAD 0x00600000u
-#define DMA_SRC_INC 0x00000000u
-#define DMA_SRC_DEC 0x00800000u
-#define DMA_SRC_FIXED 0x01000000u
-#define DMA_REPEAT 0x02000000u
-#define DMA_16BIT 0x00000000u
-#define DMA_32BIT 0x04000000u
-#define DMA_START_NOW 0x00000000u
-#define DMA_START_VBLANK 0x10000000u
-#define DMA_START_HBLANK 0x20000000u
-#define DMA_ENABLE 0x80000000u
+#define DMAW_DEST_INC 0x00000000u
+#define DMAW_DEST_DEC 0x00200000u
+#define DMAW_DEST_FIXED 0x00400000u
+#define DMAW_DEST_RELOAD 0x00600000u
+#define DMAW_SRC_INC 0x00000000u
+#define DMAW_SRC_DEC 0x00800000u
+#define DMAW_SRC_FIXED 0x01000000u
+#define DMAW_REPEAT 0x02000000u
+#define DMAW_16BIT 0x00000000u
+#define DMAW_32BIT 0x04000000u
+#define DMAW_START_NOW 0x00000000u
+#define DMAW_START_VBLANK 0x10000000u
+#define DMAW_START_HBLANK 0x20000000u
+#define DMAW_ENABLE 0x80000000u
 
 // Mask covering the dest-address mode bits, so the three control cases can be
 // told apart with a single compare.
-#define DMA_DEST_MODE_MASK 0x00600000u
+#define DMAW_DEST_MODE_MASK 0x00600000u
 
 // Offset of DMA0's registers within the IO page (REG_OFFSET_DMA0SAD in
 // include/gba/io_reg.h). This must be a page-relative offset because the accessors
@@ -69,8 +69,8 @@ static uint32_t s_fill_value[MAX_FILL_SOURCES];
 static int s_fill_count;
 
 // Called with the channel that was just armed and the value it should write.
-void DmaFillValue(int dmaNum, uint32_t value, void *dest, u32 control);
-void DmaFillValue(int dmaNum, uint32_t value, void *dest, u32 control)
+void DmaFillValue(int dmaNum, uint32_t value, volatile void *dest, u32 control);
+void DmaFillValue(int dmaNum, uint32_t value, volatile void *dest, u32 control)
 {
     if (s_fill_count < MAX_FILL_SOURCES)
     {
@@ -93,24 +93,24 @@ void DmaFillValue(int dmaNum, uint32_t value, void *dest, u32 control)
 // in bits 0-15. These constants therefore carry the <<16, unlike the REG_DMAxCNT_H
 // spellings they come from -- testing the unshifted masks against the live word
 // reads the count instead of the flags and rejects every channel.
-#define DMA_DEST_INC 0x00000000u
-#define DMA_DEST_DEC 0x00200000u
-#define DMA_DEST_FIXED 0x00400000u
-#define DMA_DEST_RELOAD 0x00600000u
-#define DMA_SRC_INC 0x00000000u
-#define DMA_SRC_DEC 0x00800000u
-#define DMA_SRC_FIXED 0x01000000u
-#define DMA_REPEAT 0x02000000u
-#define DMA_16BIT 0x00000000u
-#define DMA_32BIT 0x04000000u
-#define DMA_START_NOW 0x00000000u
-#define DMA_START_VBLANK 0x10000000u
-#define DMA_START_HBLANK 0x20000000u
-#define DMA_ENABLE 0x80000000u
+#define DMAW_DEST_INC 0x00000000u
+#define DMAW_DEST_DEC 0x00200000u
+#define DMAW_DEST_FIXED 0x00400000u
+#define DMAW_DEST_RELOAD 0x00600000u
+#define DMAW_SRC_INC 0x00000000u
+#define DMAW_SRC_DEC 0x00800000u
+#define DMAW_SRC_FIXED 0x01000000u
+#define DMAW_REPEAT 0x02000000u
+#define DMAW_16BIT 0x00000000u
+#define DMAW_32BIT 0x04000000u
+#define DMAW_START_NOW 0x00000000u
+#define DMAW_START_VBLANK 0x10000000u
+#define DMAW_START_HBLANK 0x20000000u
+#define DMAW_ENABLE 0x80000000u
 
 // Mask covering the dest-address mode bits, so the three control cases can be
 // told apart with a single compare.
-#define DMA_DEST_MODE_MASK 0x00600000u
+#define DMAW_DEST_MODE_MASK 0x00600000u
 
 // Offset of DMA0's registers within the IO page (REG_OFFSET_DMA0SAD in
 // include/gba/io_reg.h). This must be a page-relative offset because the accessors
@@ -193,12 +193,12 @@ static void dma_run_once(int n, uint32_t *unused)
     uint32_t sad, dad, ctl;
     dma_read(n, &sad, &dad, &ctl);
 
-    if (!(ctl & DMA_ENABLE))
+    if (!(ctl & DMAW_ENABLE))
         return;
 
     uint32_t mode = ctl & 0xFFFF0000u;
     uint32_t count = ctl & 0x0000FFFFu;
-    bool word = (mode & DMA_32BIT) != 0;
+    bool word = (mode & DMAW_32BIT) != 0;
     uint32_t step = word ? 4u : 2u;
 
     // A zero count means 0x10000 transfers.
@@ -207,11 +207,11 @@ static void dma_run_once(int n, uint32_t *unused)
     // Only immediate transfers are serviced here; the repeating VBlank/HBlank
     // modes are driven from their own per-frame call sites.
     uint32_t timing = mode & 0x30000000u;
-    if (timing != DMA_START_NOW)
+    if (timing != DMAW_START_NOW)
         return;
 
-    bool srcFixed = (mode & DMA_SRC_FIXED) != 0;
-    uint32_t destMode = mode & DMA_DEST_MODE_MASK;
+    bool srcFixed = (mode & DMAW_SRC_FIXED) != 0;
+    uint32_t destMode = mode & DMAW_DEST_MODE_MASK;
 
     volatile uint8_t *src = (volatile uint8_t *)(uintptr_t)sad;
     volatile uint8_t *dst = (volatile uint8_t *)(uintptr_t)dad;
@@ -250,17 +250,17 @@ static void dma_run_once(int n, uint32_t *unused)
     uint32_t newDad = dad;
     if (!srcFixed)
         newSad = sad + units * step;
-    if (destMode == DMA_DEST_RELOAD)
+    if (destMode == DMAW_DEST_RELOAD)
         newDad = dad; // stays put; SAD keeps advancing
-    else if (destMode == DMA_DEST_FIXED)
+    else if (destMode == DMAW_DEST_FIXED)
         newDad = dad;
-    else if (destMode == DMA_DEST_DEC)
+    else if (destMode == DMAW_DEST_DEC)
         newDad = dad - units * step;
     else
         newDad = dad + units * step;
 
     // A non-repeating channel disables itself when it runs out.
-    uint32_t newCtl = (mode & DMA_REPEAT) ? ctl : 0;
+    uint32_t newCtl = (mode & DMAW_REPEAT) ? ctl : 0;
 
     dma_write(n, newSad, newDad, newCtl);
     (void)dst;
@@ -274,7 +274,7 @@ void native_dma_service_now(void)
         dma_run_once(n, NULL);
 }
 
-// Run one transfer for a channel armed with DMA_START_HBLANK. The scanline
+// Run one transfer for a channel armed with DMAW_START_HBLANK. The scanline
 // effect uses this to write one register value per line.
 void native_dma_service_hblank(int scanline)
 {
@@ -282,10 +282,10 @@ void native_dma_service_hblank(int scanline)
     {
         uint32_t sad, dad, ctl;
         dma_read(n, &sad, &dad, &ctl);
-        if (!(ctl & DMA_ENABLE))
+        if (!(ctl & DMAW_ENABLE))
             continue;
         uint32_t mode = ctl & 0xFFFF0000u;
-        if ((mode & 0x30000000u) != DMA_START_HBLANK)
+        if ((mode & 0x30000000u) != DMAW_START_HBLANK)
             continue;
 
         // Walk one unit from the current pointer, then advance as the hardware

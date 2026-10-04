@@ -29,11 +29,11 @@ void CpuSet(const void *src, void *dest, u32 control);
 
 // Native builds: fill with the value itself (a stack temporary's address does not
 // survive truncation into the 32-bit register interface).
-void CpuSetFill(uint32_t value, void *dest, u32 control);
+void CpuSetFill(uint32_t value, volatile void *dest, u32 control);
 
 // Native builds: DMA fill, carrying the value rather than a pointer to a stack
 // temporary (whose address does not survive a 32-bit register).
-void DmaFillValue(int dmaNum, uint32_t value, void *dest, u32 control);
+void DmaFillValue(int dmaNum, uint32_t value, volatile void *dest, u32 control);
 
 #if MODERN && !defined(PLATFORM_NATIVE)
 // NOTE: Assumes 16-bit CpuSets unless control is a constant and has
