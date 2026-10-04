@@ -97,9 +97,18 @@
 // &tmp to the loader truncates it and the transfer reads an unmapped address.
 // Read the fill value straight from the caller's stack frame instead: pass the
 // frame pointer and let native_dma_service_now find the local by offset.
+//
+// dest is cast here rather than at the call sites: VRAM, OAM and PLTT are plain
+// integer constants (include/gba/defines.h) and the game passes them bare --
+// DmaFill32(3, 0, VRAM, VRAM_SIZE). The non-native branch below can accept that
+// because DmaSet narrows dest with a (vu32) cast, but here dest goes straight to a
+// pointer parameter and GCC rejects the int with -Wint-conversion. Only the
+// numeric address is wanted -- DmaFillValue stores (uint32_t)(uintptr_t)dest into
+// the channel's dest register -- so the cast loses nothing. DMA_CLEAR_UNCHECKED
+// below casts for the same reason.
 #define DMA_FILL_UNCHECKED(dmaNum, value, dest, size, bit)                                    \
 {                                                                                             \
-    DmaFillValue(dmaNum, (uint32_t)(value), dest,                                            \
+    DmaFillValue(dmaNum, (uint32_t)(value), (volatile void *)(dest),                          \
                  (DMA_ENABLE | DMA_START_NOW | DMA_##bit##BIT | DMA_SRC_FIXED | DMA_DEST_INC) << 16 \
                | ((size)/(bit/8)));                                                           \
 }
