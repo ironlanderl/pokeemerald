@@ -68,6 +68,30 @@ void CpuSet(const void *src, void *dest, u32 control)
     }
 }
 
+// Fill variant of CpuSet that takes the value itself rather than a pointer to
+// it. CPU_FILL_UNCHECKED has a stack temporary whose address does not survive
+// the trip through a 32-bit register on the host, so the value is passed
+// directly. Bit 24 (SRC_FIXED) selects this path.
+void CpuSetFill(uint32_t value, void *dest, u32 control)
+{
+    bool word = (control & 0x04000000) != 0;
+    u32 count = control & 0x1FFFFF;
+
+    if (word)
+    {
+        u32 *d = (u32 *)dest;
+        for (u32 i = 0; i < count; i++)
+            d[i] = value;
+    }
+    else
+    {
+        u16 *d = (u16 *)dest;
+        u16 v = (u16)value;
+        for (u32 i = 0; i < count; i++)
+            d[i] = v;
+    }
+}
+
 // CpuFastSet: always 32-bit. See CpuSet for why the macro is disabled natively.
 void CpuFastSet(const void *src, void *dest, u32 control)
 {

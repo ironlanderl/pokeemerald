@@ -1,6 +1,19 @@
 #ifndef GUARD_GBA_MACRO_H
 #define GUARD_GBA_MACRO_H
 
+#if PLATFORM_NATIVE
+// CpuFill passes the address of a stack temporary. On the GBA that lives in
+// IWRAM and a 32-bit register holds it, but the native stack sits near
+// 0x7fff_ffff_ffff, so the pointer is truncated on the way in and the loader
+// dereferences an unmapped address. Hand the value itself instead; the loader
+// has a variant that takes it directly.
+#define CPU_FILL_UNCHECKED(value, dest, size, bit)                                          \
+{                                                                                           \
+    volatile vu##bit tmp = (vu##bit)(value);                                                \
+    CpuSetFill((vu##bit)(value), dest,                                                      \
+               CPU_SET_##bit##BIT | CPU_SET_SRC_FIXED | ((size)/(bit/8) & 0x1FFFFF));      \
+}
+#else
 #define CPU_FILL_UNCHECKED(value, dest, size, bit)                                          \
 {                                                                                 \
     vu##bit tmp = (vu##bit)(value);                                               \
@@ -8,6 +21,7 @@
            dest,                                                                  \
            CPU_SET_##bit##BIT | CPU_SET_SRC_FIXED | ((size)/(bit/8) & 0x1FFFFF)); \
 }
+#endif
 
 #if MODERN
 #define CPU_FILL(value, dest, size, bit) \
@@ -77,6 +91,19 @@
     DmaSetUnchecked(dmaNum, src, dest, control)
 #endif
 
+#if PLATFORM_NATIVE
+// On the host the DMA registers are 32-bit, but a stack local's address does
+// not fit in 32 bits (the native stack sits near 0x7fff_ffff_ffff), so handing
+// &tmp to the loader truncates it and the transfer reads an unmapped address.
+// Read the fill value straight from the caller's stack frame instead: pass the
+// frame pointer and let native_dma_service_now find the local by offset.
+#define DMA_FILL_UNCHECKED(dmaNum, value, dest, size, bit)                                    \
+{                                                                                             \
+    DmaFillValue(dmaNum, (uint32_t)(value), dest,                                            \
+                 (DMA_ENABLE | DMA_START_NOW | DMA_##bit##BIT | DMA_SRC_FIXED | DMA_DEST_INC) << 16 \
+               | ((size)/(bit/8)));                                                           \
+}
+#else
 #define DMA_FILL_UNCHECKED(dmaNum, value, dest, size, bit)                                    \
 {                                                                                             \
     vu##bit tmp = (vu##bit)(value);                                                           \
@@ -86,6 +113,7 @@
            (DMA_ENABLE | DMA_START_NOW | DMA_##bit##BIT | DMA_SRC_FIXED | DMA_DEST_INC) << 16 \
          | ((size)/(bit/8)));                                                                 \
 }
+#endif
 
 #if MODERN
 #define DMA_FILL(dmaNum, value, dest, size, bit) \
