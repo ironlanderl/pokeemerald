@@ -184,7 +184,12 @@ static uint16_t DrawTextBgPixel(int layer, int x, int y, uint16_t cnt)
     if (index == 0)
         return 0; // transparent
 
-    return pal_read16((index * 2) + (layer == LAYER_BG0 ? 0 : 0));
+    // All four text backgrounds share one 512-byte palette RAM; which 16-colour
+    // bank a pixel uses comes from bits 12-15 of its screen-block entry, not
+    // from which layer it is. The old expression had a ternary with both arms
+    // zero, so every layer read bank 0 and the palettes came out wrong.
+    int bank = (entry >> 12) & 0x0F;
+    return pal_read16(bank * 32 + index * 2);
 }
 
 // Affine BG2 fetch. Uses the hardware's 20.8 fixed-point scroll origin and the

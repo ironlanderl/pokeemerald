@@ -306,7 +306,12 @@ static void *clock_main(void *arg)
 {
     (void)arg;
     // A GBA frame is 280896 cycles at 16.78 MHz; spread 228 scanlines evenly.
-    const double kNsPerScanline = 16777216.0 / NATIVE_CYCLES_PER_SCANLINE / 1000.0;
+    // One scanline of GBA time. The CPU runs at 16.777216 MHz and a frame is
+    // 280896 cycles over 228 lines, which gives 59.7275 Hz -- the real LCD
+    // refresh. The previous expression divided by 1000 rather than multiplying
+    // by 1e9, so it was ~5400x too small and the clock raced.
+    const double kNsPerScanline = 1e9 * (double)NATIVE_CYCLES_PER_SCANLINE / 16777216.0
+                                  / (double)NATIVE_TOTAL_SCANLINES;
 
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
