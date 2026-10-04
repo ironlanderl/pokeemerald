@@ -31,8 +31,13 @@ struct Berry2
     u16 size;
     u8 maxYield;
     u8 minYield;
-    u8 *description1;
-    u8 *description2;
+    // The description pointers must be uptr32, not real pointers: this struct lives
+    // inside SaveBlock1's enigmaBerry, so on a 64-bit host two 8-byte pointers
+    // would make Berry2 40 bytes instead of the retail 28 and EnigmaBerry 64 instead
+    // of 52 — and SetEnigmaBerry() would then copy 64 bytes into a 52-byte slot,
+    // clobbering mysteryGift behind it. See uptr32 in gba/types.h.
+    uptr32 description1;
+    uptr32 description2;
     u8 stageDuration;
     u8 spicy;
     u8 dry;
@@ -40,7 +45,6 @@ struct Berry2
     u8 bitter;
     u8 sour;
     u8 smoothness;
-    //u8 padding;
 };
 
 struct EnigmaBerry
@@ -72,6 +76,6 @@ struct BerryTree
     u8 watered2:1;
     u8 watered3:1;
     u8 watered4:1;
-};
+} GBA_STRUCT_ABI_ALIGN; // SaveBlock1 berryTrees[BERRY_TREES_COUNT]
 
 #endif // GUARD_GLOBAL_BERRY_H

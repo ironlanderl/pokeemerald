@@ -51,6 +51,31 @@ typedef const u8 *uptr32;
 #define SAVE_PTR_FROM(x) ((void *)(x))
 #endif
 
+// agbcc — the compiler the retail ROM is built with — follows the old ARM ABI,
+// which rounds *every* struct's alignment and size up to a multiple of 4, no
+// matter how the struct's members are laid out. A 64-bit host rounds only to the
+// struct's natural alignment, so a struct of u8 fields is 6 bytes there and 8
+// here. Measured against agbcc: {u8 a[1]} is 4, {u8 a[5]} is 8, {u8 a[21]} is 24,
+// a struct of 16 bits of u16 bitfields is 4, and {u8 x; struct {u8 a[6]; } s; u32 y;}
+// places s at offset 4 (the host places it at 1).
+//
+// That is invisible for ROM-resident data, but it silently changes the layout of
+// any struct embedded in a save block: every field after the first offender reads
+// the wrong bytes and the save stops being interchangeable with a cartridge. So
+// save-resident structs carry this attribute on the host to reproduce the retail
+// layout exactly.
+//
+// A struct that needs to escape this rounding (ExternalEventFlags) instead uses
+// __attribute__((packed)), which drops both the alignment and the rounding —
+// agbcc honours packed, and it is 21 bytes on both compilers.
+#if defined(PLATFORM_NATIVE)
+#define GBA_STRUCT_ABI_ALIGN __attribute__((aligned(4)))
+#else
+// On the GBA agbcc applies the 4-byte rule to every struct anyway, so the macro
+// must expand to nothing or the ROM build's layout would change.
+#define GBA_STRUCT_ABI_ALIGN
+#endif
+
 typedef u8  bool8;
 typedef u16 bool16;
 typedef u32 bool32;

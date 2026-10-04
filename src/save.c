@@ -20,6 +20,49 @@ static u8 TryWriteSector(u8, u8 *);
 static u8 HandleWriteSector(u16, const struct SaveSectorLocation *);
 static u8 HandleReplaceSector(u16, const struct SaveSectorLocation *);
 
+// The save layout is a wire format: it is shared with the retail cartridge, so a
+// native save must be byte-for-byte interchangeable with one written by a ROM
+// build (and vice versa). Nothing about the C types enforces that -- src/save.c
+// and src/load_save.c both derive their flash geometry from the host's sizeof,
+// so if the host's idea of a struct's size drifts from the ARM build's, the port
+// still compiles and still runs; it just writes a corrupt save and reads back
+// garbage for every field after the first disagreement. These assertions are the
+// only thing that catches it.
+//
+// The totals are not sufficient on their own -- two layouts can sum to the same
+// size while individual members sit at different offsets, which is just as
+// corrupt -- so the leaf types that agbcc lays out differently are pinned too.
+//
+// These must hold on the ROM build as well, and do: agbcc's sizes are the source
+// of these numbers. They are asserted under PLATFORM_NATIVE only so that this
+// header-level check cannot perturb the byte-exact ROM build.
+#if PLATFORM_NATIVE
+STATIC_ASSERT(sizeof(struct SaveBlock1) == 15752, SaveBlock1SizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct SaveBlock2) == 3884, SaveBlock2SizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct PokemonStorage) == 33744, PokemonStorageSizeMustMatchCartridge);
+
+// agbcc rounds every struct up to a multiple of 4 (the old ARM ABI); the host
+// rounds only to natural alignment. See GBA_STRUCT_ABI_ALIGN in gba/types.h.
+STATIC_ASSERT(sizeof(struct BerryTree) == 8, BerryTreeSizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct Time) == 8, TimeSizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct Mail) == 36, MailSizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct LinkBattleRecords) == 88, LinkBattleRecordsSizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct BattleDomeTrainer) == 4, BattleDomeTrainerSizeMustMatchCartridge);
+
+// Real 64-bit pointers would make Berry2 40 bytes and EnigmaBerry 64, so
+// SetEnigmaBerry would copy 64 bytes into the 52-byte slot the cartridge uses.
+STATIC_ASSERT(sizeof(struct Berry2) == 28, Berry2SizeMustMatchCartridge);
+STATIC_ASSERT(sizeof(struct EnigmaBerry) == 52, EnigmaBerrySizeMustMatchCartridge);
+
+// Spot-check offsets, so a future edit cannot keep the totals right while moving
+// a member. These are the offsets src/berry.c and the field code index through.
+STATIC_ASSERT(offsetof(struct SaveBlock1, berryTrees) == 0x169C, BerryTreesOffsetMustMatchCartridge);
+STATIC_ASSERT(offsetof(struct SaveBlock1, enigmaBerry) == 0x31F8, EnigmaBerryOffsetMustMatchCartridge);
+STATIC_ASSERT(offsetof(struct SaveBlock2, localTimeOffset) == 0x98, LocalTimeOffsetMustMatchCartridge);
+STATIC_ASSERT(offsetof(struct SaveBlock2, lastBerryTreeUpdate) == 0xA0, LastBerryTreeUpdateOffsetMustMatchCartridge);
+STATIC_ASSERT(offsetof(struct SaveBlock2, frontier) == 0x64C, FrontierOffsetMustMatchCartridge);
+#endif
+
 // Divide save blocks into individual chunks to be written to flash sectors
 
 /*

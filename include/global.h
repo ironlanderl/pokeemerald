@@ -201,7 +201,7 @@ struct Time
     /*0x02*/ s8 hours;
     /*0x03*/ s8 minutes;
     /*0x04*/ s8 seconds;
-};
+} GBA_STRUCT_ABI_ALIGN; // SaveBlock2 localTimeOffset / lastBerryTreeUpdate
 
 struct Pokedex
 {
@@ -370,7 +370,8 @@ struct BattleDomeTrainer
     u16 isEliminated:1;
     u16 eliminatedAt:2;
     u16 forfeited:3;
-};
+} GBA_STRUCT_ABI_ALIGN; // BattleFrontier domeTrainers[16]; the bitfields total only
+                       // 16 bits, but agbcc still rounds the container to 4.
 
 #define DOME_TOURNAMENT_TRAINERS_COUNT 16
 #define BATTLE_TOWER_RECORD_COUNT 5
@@ -719,7 +720,9 @@ typedef union OldMan
     struct MauvilleOldManTrader trader;
     struct MauvilleManStoryteller storyteller;
     u8 filler[0x40];
-} OldMan;
+} OldMan GBA_STRUCT_ABI_ALIGN; // SaveBlock1 oldMan. A union, not a struct, but agbcc
+                                // rounds union alignment to 4 the same way, and its
+                                // members are only u8/u16 arrays that align to 1 or 2.
 
 #define LINK_B_RECORDS_COUNT 5
 
@@ -737,7 +740,7 @@ struct LinkBattleRecords
     struct LinkBattleRecord entries[LINK_B_RECORDS_COUNT];
     u8 languages[LINK_B_RECORDS_COUNT];
     //u8 padding;
-};
+} GBA_STRUCT_ABI_ALIGN; // SaveBlock1 linkBattleRecords
 
 struct RecordMixingGiftData
 {
@@ -772,7 +775,7 @@ struct Mail
     /*0x1A*/ u8 trainerId[TRAINER_ID_LENGTH];
     /*0x1E*/ u16 species;
     /*0x20*/ u16 itemId;
-};
+} GBA_STRUCT_ABI_ALIGN; // SaveBlock1 mail[MAIL_COUNT]; also the head of DaycareMail
 
 struct DaycareMail
 {

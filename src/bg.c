@@ -1238,10 +1238,21 @@ bool32 IsInvalidBg32(u8 bg)
 
 bool32 IsTileMapOutsideWram(u8 bg)
 {
+#if PLATFORM_NATIVE
+    // The GBA test below rejects a tilemap buffer above IWRAM_END, because on the
+    // cartridge nothing above IWRAM is readable by DMA. Natively the game heap is
+    // an ordinary allocation in the image's .data at 0x40xxxxxx -- numerically far
+    // above IWRAM_END but perfectly readable -- so the range test rejected every
+    // buffer, CopyBgTilemapBufferToVram silently did nothing, and BG0's tilemap in
+    // VRAM stayed zero: every pixel fell back to tile 0 (transparent), so the
+    // screen showed nothing but the backdrop. Only NULL is genuinely invalid here.
+    return sGpuBgConfigs2[bg].tilemap == NULL;
+#else
     if (sGpuBgConfigs2[bg].tilemap > (void *)IWRAM_END)
         return TRUE;
     else if (sGpuBgConfigs2[bg].tilemap == NULL)
         return TRUE;
     else
         return FALSE;
+#endif
 }

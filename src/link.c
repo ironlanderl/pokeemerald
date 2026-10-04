@@ -236,6 +236,17 @@ static const u8 sUnusedData[] = {0x00, 0xFF, 0xFE, 0xFF, 0x00};
 
 bool8 IsWirelessAdapterConnected(void)
 {
+#if PLATFORM_NATIVE
+    // There is no wireless adapter and no link cable in this port, so the
+    // answer is always no. Returning early is not just an optimisation: the RFU
+    // stack below is stubbed out, with rfu_initializeAPI returning before it
+    // calls STWI_init_all. That leaves gSTWIStatus NULL, and the first thing
+    // rfu_LMAN_REQBN_softReset_and_checkID does is AgbRFU_SoftReset, which
+    // dereferences gSTWIStatus->timerSelect (src/librfu_stwi.c:64). The main
+    // menu calls this from Task_MainMenuCheckSaveFile, so the game segfaulted
+    // on entering the menu.
+    return FALSE;
+#else
     SetWirelessCommType1();
     InitRFUAPI();
     if (rfu_LMAN_REQBN_softReset_and_checkID() == RFU_ID)
@@ -248,6 +259,7 @@ bool8 IsWirelessAdapterConnected(void)
     CloseLink();
     RestoreSerialTimer3IntrHandlers();
     return FALSE;
+#endif
 }
 
 void Task_DestroySelf(u8 taskId)

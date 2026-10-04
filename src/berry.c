@@ -981,7 +981,34 @@ const struct Berry *GetBerryInfo(u8 berry)
 {
     if (berry == ITEM_TO_BERRY(ITEM_ENIGMA_BERRY) && IsEnigmaBerryValid())
     {
+#if PLATFORM_NATIVE
+        // Not a cast: struct Berry keeps real host pointers (its table is ROM data
+        // built by a static initializer, which cannot narrow a pointer to 32 bits),
+        // so it is 40 bytes here against Berry2's 28 and the two description fields
+        // sit at different offsets. Rebuild it instead. The description pointers are
+        // stored in the save as uptr32, i.e. GBA ROM addresses, which the native port
+        // maps at 0x08000000, so unwrapping them directly is correct.
+        static struct Berry sEnigmaBerry;
+        const struct Berry2 *src = &gSaveBlock1Ptr->enigmaBerry.berry;
+
+        memcpy((void *)sEnigmaBerry.name, src->name, sizeof(src->name));
+        sEnigmaBerry.firmness = src->firmness;
+        sEnigmaBerry.size = src->size;
+        sEnigmaBerry.maxYield = src->maxYield;
+        sEnigmaBerry.minYield = src->minYield;
+        sEnigmaBerry.description1 = SAVE_PTR_FROM(src->description1);
+        sEnigmaBerry.description2 = SAVE_PTR_FROM(src->description2);
+        sEnigmaBerry.stageDuration = src->stageDuration;
+        sEnigmaBerry.spicy = src->spicy;
+        sEnigmaBerry.dry = src->dry;
+        sEnigmaBerry.sweet = src->sweet;
+        sEnigmaBerry.bitter = src->bitter;
+        sEnigmaBerry.sour = src->sour;
+        sEnigmaBerry.smoothness = src->smoothness;
+        return &sEnigmaBerry;
+#else
         return (struct Berry *)(&gSaveBlock1Ptr->enigmaBerry.berry);
+#endif
     }
     else
     {

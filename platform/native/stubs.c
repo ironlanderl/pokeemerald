@@ -10,7 +10,8 @@
 // The m4a sound engine is a different case: it is genuinely used, so these
 // stubs only satisfy the linker until the real port lands in the audio phase.
 // They produce silence. Signatures match include/gba/m4a_internal.h exactly,
-// which is what lets the link close without casts.
+// which is what lets the link close without casts. The exception is MPlayMain,
+// which lives in audio.c because game logic reads what it writes.
 
 #include "global.h"
 #include "gba/m4a_internal.h"
@@ -94,18 +95,13 @@ void RealClearChain(void *x)
 // into it at boot, so it needs somewhere to land.
 char SoundMainRAM[0x800] = {0};
 
-void SoundMain(void)
-{
-}
-
 void SoundMainBTM(void)
 {
 }
 
-void MPlayMain(struct MusicPlayerInfo *mplayInfo)
-{
-    (void)mplayInfo;
-}
+// MPlayMain is not here: it is real code in audio.c. See the comment there --
+// leaving it a stub keeps MusicPlayerInfo.status permanently zero, which locks
+// the title screen out of the main menu.
 
 void TrackStop(struct MusicPlayerInfo *mplayInfo, struct MusicPlayerTrack *track)
 {

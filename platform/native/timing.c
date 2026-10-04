@@ -12,11 +12,134 @@
 
 #include "global.h"
 #include "main.h"
+#include "palette.h"
 #include "native.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+
+#ifdef NATIVE_PROFILE
+#include <time.h>
+// NOT <stdlib.h>: global.h defines min/max/abs as macros, which collide with
+// the declarations there and turn atexit() into syntax errors. Only that one
+// function is needed, so declare it directly.
+extern void atexit(void (*func)(void));
+
+// --- Frame-stage profiler (compiled out unless -DNATIVE_PROFILE) -----------
+//
+// The VBlank path runs three very different things back to back: the game's
+// own logic (everything between one VBlank returning and the next one being
+// dispatched), the software rasterizer, and the GL present. Their relative
+// cost is not visible from wall time alone, because SDL_GL_SwapWindow blocks
+// on vsync and so absorbs whatever the other two did or failed to do.
+//
+// Times are nanoseconds from CLOCK_MONOTONIC, accumulated over the run.
+static uint64_t prof_ppu_ns, prof_video_ns, prof_logic_ns, prof_input_ns;
+static uint64_t prof_frames;
+
+// VBlank counters: how many the clock thread raised, how many the main thread
+// actually dispatched. raised > dispatched means the clock is running ahead and
+// frames are being dropped.
+static uint64_t prof_clock_vblanks, prof_dispatched_vblanks;
+
+// Clock-thread lateness. kNsPerScanline is the budget; if the thread wakes more
+// than a scanline period late the virtual clock is already slipping.
+static uint64_t prof_clock_late_ns;   // summed overshoot past the deadline
+static uint64_t prof_clock_late_cnt;  // iterations that overshot at all
+static uint64_t prof_clock_max_late_ns;
+
+// Per-frame histogram: bucket index = microseconds. 65536 covers up to 65ms,
+// which a 60Hz budget of 16.67ms fits inside comfortably.
+#define PROF_HIST_BUCKETS 65536
+static uint64_t prof_hist_ppu[PROF_HIST_BUCKETS];
+static uint64_t prof_hist_video[PROF_HIST_BUCKETS];
+static uint64_t prof_hist_total[PROF_HIST_BUCKETS];
+
+static inline uint64_t prof_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void prof_hist_add(uint64_t *hist, uint64_t ns)
+{
+    uint64_t us = ns / 1000;
+    if (us >= PROF_HIST_BUCKETS)
+        us = PROF_HIST_BUCKETS - 1;
+    hist[us]++;
+}
+
+static int prof_hist_percentile(const uint64_t *hist, uint64_t total, double pct)
+{
+    if (!total)
+        return 0;
+    uint64_t want = (uint64_t)(total * pct + 0.5);
+    uint64_t acc = 0;
+    for (int i = 0; i < PROF_HIST_BUCKETS; i++)
+    {
+        acc += hist[i];
+        if (acc >= want)
+            return i;
+    }
+    return PROF_HIST_BUCKETS - 1;
+}
+
+// Point at which the previous VBlank finished its work; the gap from there to
+// the next VBlank's render start is the game's own logic plus its idle spin.
+static uint64_t prof_last_frame_end_ns;
+
+static void prof_report(void)
+{
+    if (!prof_frames)
+        return;
+
+    fprintf(stderr, "\n=== native frame profile ===\n");
+    fprintf(stderr, "frames dispatched      : %llu\n", (unsigned long long)prof_frames);
+    fprintf(stderr, "clock-thread VBlanks   : %llu\n", (unsigned long long)prof_clock_vblanks);
+    fprintf(stderr, "dispatched VBlanks     : %llu\n", (unsigned long long)prof_dispatched_vblanks);
+    if (prof_clock_vblanks)
+        fprintf(stderr, "dispatched / raised    : %.3f  (<1 means the clock runs ahead)\n",
+                (double)prof_dispatched_vblanks / (double)prof_clock_vblanks);
+    fprintf(stderr, "clock late events      : %llu, total %llu ms, max %.3f ms\n",
+            (unsigned long long)prof_clock_late_cnt,
+            (unsigned long long)(prof_clock_late_ns / 1000000),
+            (double)prof_clock_max_late_ns / 1e6);
+
+    const double n = (double)prof_frames;
+    fprintf(stderr, "\nper frame (us): mean / p50 / p99 / max\n");
+    fprintf(stderr, "  game logic : %8.1f / %6d / %6d\n",
+            (double)prof_logic_ns / 1000.0 / n, prof_hist_percentile(prof_hist_total, prof_frames, 0.50),
+            prof_hist_percentile(prof_hist_total, prof_frames, 0.99));
+    fprintf(stderr, "  ppu raster : %8.1f / %6d / %6d\n",
+            (double)prof_ppu_ns / 1000.0 / n, prof_hist_percentile(prof_hist_ppu, prof_frames, 0.50),
+            prof_hist_percentile(prof_hist_ppu, prof_frames, 0.99));
+    fprintf(stderr, "  gl present : %8.1f / %6d / %6d\n",
+            (double)prof_video_ns / 1000.0 / n, prof_hist_percentile(prof_hist_video, prof_frames, 0.50),
+            prof_hist_percentile(prof_hist_video, prof_frames, 0.99));
+    fprintf(stderr, "  input poll : %8.1f\n", (double)prof_input_ns / 1000.0 / n);
+
+    // Where the total frame time goes: the >16.67ms buckets are the frames that
+    // cannot fit in a 60Hz budget and therefore cost a whole extra display frame.
+    // The histogram is indexed by microseconds, so index 16667 is already 16.67ms.
+    uint64_t over = 0;
+    for (int i = 16667; i < PROF_HIST_BUCKETS; i++)
+        over += prof_hist_total[i];
+
+    // PPU sub-stage breakdown (see ppu.c). Zero unless the PPU was built with
+    // -DNATIVE_PROFILE too, which the Makefile does for PROFILE=1.
+    extern uint64_t prof_ppu_obj_calls;
+    fprintf(stderr, "\nppu obj pass  : %llu calls/frame\n",
+            (unsigned long long)(prof_ppu_obj_calls / prof_frames));
+    fprintf(stderr, "\nframes over 16.67ms    : %llu / %llu (%.1f%%)\n",
+            (unsigned long long)over, (unsigned long long)prof_frames,
+            100.0 * (double)over / n);
+    fprintf(stderr, "  => implied FPS if each miss costs one extra vsync: %.1f\n",
+            n / (n + over));
+    fprintf(stderr, "=== end profile ===\n\n");
+}
+#endif // NATIVE_PROFILE
 
 // The scanline, published by the clock thread and read by the game (m4aSoundInit
 // busy-waits for 159, ProcessDma3Requests compares against 224). Declared
@@ -56,6 +179,12 @@ void native_timing_init(void)
     s_ie = 0;
     s_if = 0;
     s_ime = 0;
+#ifdef NATIVE_PROFILE
+    // Seed the "game logic" window from process start, so the first frame's
+    // logic bucket includes the whole boot rather than reading as zero.
+    prof_last_frame_end_ns = prof_now_ns();
+    atexit(prof_report);
+#endif
 }
 
 void native_timing_set_enabled(bool enabled)
@@ -196,11 +325,39 @@ bool native_timing_run_interrupt(void)
             void native_dma_service_now(void);
             native_dma_service_now();
             native_timing_apply_press();
+#ifdef NATIVE_PROFILE
+            uint64_t t0 = prof_now_ns();
+#endif
             if (!native_input_poll())
                 native_request_shutdown();
+#ifdef NATIVE_PROFILE
+            uint64_t t1 = prof_now_ns();
+            prof_input_ns += t1 - t0;
+            native_ppu_render_frame();
+            uint64_t t2 = prof_now_ns();
+            prof_ppu_ns += t2 - t1;
+            prof_hist_add(prof_hist_ppu, t2 - t1);
+            native_video_render();
+            uint64_t t3 = prof_now_ns();
+            prof_video_ns += t3 - t2;
+            prof_hist_add(prof_hist_video, t3 - t2);
+            native_timing_note_frame();
+            {
+                uint64_t t4 = prof_now_ns();
+                // Game logic = the gap between finishing the previous VBlank and
+                // starting this one. Includes WaitForVBlank's spin, which on its
+                // own is "the clock has not reached VBlank yet".
+                prof_logic_ns += t0 - prof_last_frame_end_ns;
+                prof_hist_add(prof_hist_total, t4 - prof_last_frame_end_ns);
+                prof_last_frame_end_ns = t4;
+                prof_frames++;
+                prof_dispatched_vblanks++;
+            }
+#else
             native_ppu_render_frame();
             native_video_render();
             native_timing_note_frame();
+#endif
 
             io[REG_OFFSET_VCOUNT / 2] = saved;
         }
@@ -310,8 +467,7 @@ static void *clock_main(void *arg)
     // 280896 cycles over 228 lines, which gives 59.7275 Hz -- the real LCD
     // refresh. The previous expression divided by 1000 rather than multiplying
     // by 1e9, so it was ~5400x too small and the clock raced.
-    const double kNsPerScanline = 1e9 * (double)NATIVE_CYCLES_PER_SCANLINE / 16777216.0
-                                  / (double)NATIVE_TOTAL_SCANLINES;
+    const double kNsPerScanline = 1e9 * (double)NATIVE_CYCLES_PER_SCANLINE / 16777216.0;
 
     struct timespec next;
     clock_gettime(CLOCK_MONOTONIC, &next);
@@ -333,7 +489,12 @@ static void *clock_main(void *arg)
         if (line == 150)
             if_raise(INTR_FLAG_VCOUNT);
         if (line == NATIVE_VBLANK_START)
+        {
             if_raise(INTR_FLAG_VBLANK);
+#ifdef NATIVE_PROFILE
+            prof_clock_vblanks++;
+#endif
+        }
         *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_IF) = __atomic_load_n(&s_if, __ATOMIC_SEQ_CST);
 
 
@@ -345,6 +506,24 @@ static void *clock_main(void *arg)
             next.tv_sec++;
         }
         clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+#ifdef NATIVE_PROFILE
+        // How far past its own deadline did this iteration wake? Absolute
+        // deadlines mean lateness accumulates into every later one, so a
+        // sustained positive value is the clock losing real time.
+        {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+            int64_t late = ((int64_t)now.tv_sec - (int64_t)next.tv_sec) * 1000000000ll
+                         + ((int64_t)now.tv_nsec - (int64_t)next.tv_nsec);
+            if (late > 0)
+            {
+                prof_clock_late_ns += (uint64_t)late;
+                prof_clock_late_cnt++;
+                if ((uint64_t)late > prof_clock_max_late_ns)
+                    prof_clock_max_late_ns = (uint64_t)late;
+            }
+        }
+#endif
     }
     return NULL;
 }

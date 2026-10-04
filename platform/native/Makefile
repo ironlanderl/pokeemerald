@@ -56,12 +56,22 @@ CFLAGS := -O2 -g \
   -Werror=incompatible-pointer-types -Werror=implicit-function-declaration \
   $(SDL_CFLAGS)
 
+# Per-stage frame profiler (timing.c). Off by default; it adds two clock_gettime
+# calls per frame and an atexit report. Build with `make PROFILE=1`.
+ifeq ($(PROFILE),1)
+  CFLAGS += -DNATIVE_PROFILE
+endif
+
+# Escape hatch for ad-hoc defines, e.g. `make PROFILE=1 EXTRA_CFLAGS=-DPPU_ABLATE_OBJ`.
+# Used to attribute PPU cost by ablation (compile out one stage, re-measure).
+CFLAGS += $(EXTRA_CFLAGS)
+
 PREPROC := $(abspath $(ROOT)/tools/preproc/preproc)
 
 # --- sources -----------------------------------------------------------------
 
 GAME_SRCS := $(wildcard $(ROOT)/src/*.c)
-PLAT_SRCS := main.c memory.c timing.c ppu.c video.c bios.c dma.c stubs.c
+PLAT_SRCS := main.c memory.c timing.c ppu.c video.c bios.c dma.c audio.c stubs.c
 
 GAME_OBJS := $(patsubst $(ROOT)/src/%.c,$(OUT)/src/%.o,$(GAME_SRCS))
 PLAT_OBJS := $(patsubst %.c,$(OUT)/plat/%.o,$(PLAT_SRCS))

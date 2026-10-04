@@ -20,6 +20,12 @@
 #include "native.h"
 
 #include <string.h>
+#include <stdio.h>
+
+// Call counters for the frame profiler (timing.c); see PROFILE=1 in the
+// Makefile. The OBJ count is the interesting one: it is what the per-scanline
+// candidate list exists to keep down.
+uint64_t prof_ppu_obj_calls;
 
 #define VRAM_BASE 0x06000000u
 #define PLTT_BASE 0x05000000u
@@ -467,6 +473,56 @@ static uint32_t ApplyBlending(uint16_t bldcnt, uint16_t bldalpha, uint16_t bldy,
 // Frame
 // ---------------------------------------------------------------------------
 
+// Per-scanline sprite candidate list.
+//
+// The naive path asks all 128 OAM entries about every one of the 240 pixels on
+// a line: 30,720 DrawSpritePixel calls per scanline, 4.9M per frame, almost
+// all of which reject on the y range. Nearly every one of those calls still
+// re-reads 16 bytes of OAM through the emulated map and re-decodes shape,
+// size, flips and affine mode before it can discard the sprite.
+//
+// The hardware only ever keeps sprites that intersect the current line, so
+// build that list once per scanline: 128 OAM reads to produce it, then only
+// the candidates that actually reach this line are consulted per pixel.
+static uint8_t s_obj_row[128];
+static int s_obj_row_count;
+
+static void BuildObjRow(int y)
+{
+    s_obj_row_count = 0;
+    for (int i = 0; i < 128; i++)
+    {
+        volatile uint32_t *oam = (volatile uint32_t *)(OAM_BASE + i * 8);
+        uint32_t w0 = oam[0];
+        uint32_t w1 = oam[1];
+
+        int objMode = (int)((w0 >> 10) & 3);
+        if (objMode == 3) // prohibited
+            continue;
+
+        int affineMode = (w0 >> 8) & 3;
+        int shape = (w0 >> 22) & 3;
+        int size = (w1 >> 14) & 3;
+        if (shape == 3)
+            continue;
+
+        static const int kH[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
+        int h = kH[shape][size];
+        int objY = w0 & 0xFF;
+
+        if (affineMode == 1 || affineMode == 3)
+        {
+            // An affine sprite lives in a 128x128 cell positioned by the
+            // matrix, so its vertical extent is the whole cell, not `h`.
+            s_obj_row[s_obj_row_count++] = (uint8_t)i;
+            continue;
+        }
+
+        if (y >= objY && y < objY + h)
+            s_obj_row[s_obj_row_count++] = (uint8_t)i;
+    }
+}
+
 // Render one scanline.
 static void RenderScanline(int y)
 {
@@ -497,6 +553,9 @@ static void RenderScanline(int y)
     uint16_t win0h = io_read16(0x40), win0v = io_read16(0x42);
     uint16_t win1h = io_read16(0x44), win1v = io_read16(0x46);
     uint16_t winin = io_read16(0x48), winout = io_read16(0x4A);
+
+    if ((dispcnt & DISPCNT_OBJ_ON) && native_ppu_layer_visible[LAYER_OBJ])
+        BuildObjRow(y);
 
     for (int x = 0; x < DISPLAY_WIDTH; x++)
     {
@@ -554,13 +613,16 @@ static void RenderScanline(int y)
         bool objWindowHit = false;
         if ((dispcnt & DISPCNT_OBJ_ON) && native_ppu_layer_visible[LAYER_OBJ])
         {
-            for (int i = 0; i < 128; i++)
+            for (int s = 0; s < s_obj_row_count; s++)
             {
-                volatile uint32_t *oam = (volatile uint32_t *)(OAM_BASE + i * 8);
-                int mode = (int)((oam[0] >> 10) & 3);
+                int i = s_obj_row[s];
+                int mode = (int)((*(volatile uint32_t *)(OAM_BASE + i * 8) >> 10) & 3);
                 bool dummy;
                 uint16_t c = 0;
 
+#ifdef NATIVE_PROFILE
+                prof_ppu_obj_calls++;
+#endif
                 if (mode == 2) // ST_OAM_OBJ_WINDOW
                 {
                     // Only opaque pixels of the mask sprite count.
@@ -599,10 +661,31 @@ static void RenderScanline(int y)
             bgMask = (winin >> 8) & 0x0F;
             objEnabled = (winin & (1 << 12)) != 0;
         }
-        else
+        else if (dispcnt & (DISPCNT_WIN0_ON | DISPCNT_WIN1_ON))
         {
+            // At least one window region exists, so the outside region exists
+            // as well -- GBATEK: "if any of these regions is enabled then the
+            // 'Outside of Windows' region is automatically enabled, too" --
+            // and WINOUT selects the layers shown there. This is the case the
+            // game relies on at, for example, src/fldeff_misc.c:364-368, which
+            // sets WINOUT to 0 *and* enables window 0 to show everything.
             bgMask = winout & 0x0F;
             objEnabled = (winout & (1 << 4)) != 0;
+        }
+        else
+        {
+            // No window is enabled, so there is no outside region either and
+            // WINOUT does not apply: every layer DISPCNT enables is shown.
+            //
+            // Applying WINOUT here regardless threw away every sprite in the
+            // intro's scenes 1 and 2. Those enable OBJ but no window, leaving
+            // WINOUT at its initial 0, so objEnabled came out false for every
+            // pixel and objColor was forced to 0. Since the intro's first scene
+            // also has no BG scroll motion until Task_Scene1_PanUp starts at
+            // gIntroFrameCounter 560 (src/intro.c:1251), the framebuffer came
+            // out bit-identical for ~560 frames -- a 21 second freeze at 30fps.
+            bgMask = 0x0F;
+            objEnabled = true;
         }
 
         if (!(bgMask & (1u << 0))) bgColor[0] = 0;
@@ -626,6 +709,26 @@ static void RenderScanline(int y)
                     bgColor[i] = 0;
             if (!((objMaskSrc >> 12) & 1u))
                 objColor = 0;
+        }
+
+        // Rebuild the composite from the masked colours.
+        //
+        // `color` was accumulated above, BEFORE the window mask was applied to
+        // bgColor[]. Using it directly in the non-blended path below therefore
+        // let a background layer through even where WININ/WINOUT masked it
+        // out, so window masking only ever took effect on blended pixels --
+        // which is also what let the copyright screen keep drawing while every
+        // sprite was being dropped. Redo the same topmost-wins walk over the
+        // masked array: index 0 is highest priority and tile index 0 is
+        // transparent, matching the accumulation above.
+        color = s_backdrop;
+        for (int i = 0; i < 4; i++)
+        {
+            if (bgColor[i] != 0)
+            {
+                color = bgColor[i];
+                break;
+            }
         }
 
         // Compose, then blend.
