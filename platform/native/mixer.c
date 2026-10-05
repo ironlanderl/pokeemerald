@@ -686,7 +686,9 @@ static bool UpdateEnvelope(struct SoundChannel *chan, struct SoundInfo *si,
         }
 
         // A fresh note: latch the wave start, zero the envelope and the
-        // interpolation phase, and honour the wave's loop flag.
+        // interpolation phase, and honour the wave's loop flag. The ARM
+        // original then falls straight through into its attack increment, so
+        // the first frame mixes at `attack` rather than at silence.
         flags = SOUND_CHANNEL_SF_ENV_ATTACK;
         chan->currentPointer = (s8 *)chan->wav->data + chan->count;
         chan->count = chan->wav->size - chan->count;
@@ -695,10 +697,6 @@ static bool UpdateEnvelope(struct SoundChannel *chan, struct SoundInfo *si,
         if (chan->wav->status & WAVE_DATA_FLAG_LOOP)
             flags |= SOUND_CHANNEL_SF_LOOP;
         chan->statusFlags = flags;
-
-        // The attack counter has not run yet, so this frame is silent -- the
-        // same thing happens on hardware.
-        return false;
     }
 
     {
