@@ -179,7 +179,19 @@ static void PushPcm(const struct SoundInfo *si, u32 offset, u32 samples)
 
     if (sDevice != 0 && PCM_RING_FRAMES - (sWrite - sRead) >= samples)
     {
-        memcpy(&sRing[(sWrite * 2) & PCM_RING_MASK], dst, samples * 2 * sizeof(s16));
+        // A frame can straddle the wrap point, so the copy is split rather than
+        // masked: writing samples*2 elements at a masked offset runs off the end
+        // of sRing whenever the offset lands near its top, which glibc's
+        // fortify checks catch as a buffer overflow.
+        u32 words = samples * 2;
+        u32 start = (sWrite * 2) & PCM_RING_MASK;
+        u32 first = PCM_RING_FRAMES * 2 - start;
+
+        if (first > words)
+            first = words;
+        memcpy(&sRing[start], dst, first * sizeof(s16));
+        if (words > first)
+            memcpy(&sRing[0], &dst[first], (words - first) * sizeof(s16));
         sWrite += samples;
     }
     // Otherwise the host is behind and this frame is dropped: the interrupt
