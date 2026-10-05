@@ -214,7 +214,13 @@ static void MixInterpolated(struct SoundChannel *chan, struct LoopInfo *loop, bo
 
             if (advance != 0)
             {
-                fw &= 0x3F800000;
+                // `bic r9, r9, #0x3F800000` is AND-NOT: it drops the whole
+                // 9-bit integer part (bits 22..30) and keeps the 22-bit
+                // fraction plus the carry bit. ANDing with 0x3F800000 instead
+                // would keep the integer part and drop the fraction, so the
+                // phase would never accumulate and every sample would
+                // interpolate a full step ahead.
+                fw &= ~0x3F800000u;
                 count -= (s32)advance;
 
                 if (count <= 0)
@@ -250,8 +256,15 @@ static void MixInterpolated(struct SoundChannel *chan, struct LoopInfo *loop, bo
 
                 if (advance == 1)
                 {
-                    sample += delta;
+                    // Stepping exactly one sample still re-reads the next pair:
+                    // the ARM's advance==1 case falls through to the same
+                    // `ldrsb r1, [r3, #1]!; sub r1, r1, r0` that the multi-step
+                    // case uses, so delta tracks the new slope. Without it the
+                    // interpolator extrapolates the first delta forever and the
+                    // waveform becomes a ramp.
                     pos += dir;
+                    sample += delta;
+                    delta = FetchAt(chan, base, baseIdx, pos + dir, dpcm) - sample;
                 }
                 else
                 {
@@ -264,6 +277,12 @@ static void MixInterpolated(struct SoundChannel *chan, struct LoopInfo *loop, bo
 
         *rBuf++ = accR;
         *lBuf++ = accL;
+
+        // The wave ran out mid-word. The ARM original stops the channel here
+        // rather than carrying on into the next word, which would read past the
+        // end of the sample data.
+        if (dead)
+            break;
     }
 
     *prBuf = rBuf;
