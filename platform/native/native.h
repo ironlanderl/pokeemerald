@@ -16,6 +16,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// This header is included from C (the whole platform layer) and from C++ (the
+// ImGui overlay's UI half), so everything it declares is wrapped here.
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// SDL_Window is a typedef of `struct SDL_Window`; typedef it here so this
+// header does not have to pull in SDL.h for the one accessor below. Including
+// SDL.h twice is harmless (it has its own guard), but every C file in the
+// platform layer would then be recompiled when SDL's headers change.
+typedef struct SDL_Window SDL_Window;
+
 // ---------------------------------------------------------------------------
 // GBA memory map
 // ---------------------------------------------------------------------------
@@ -77,6 +89,9 @@ void native_flash_sync(void);
 
 const char *native_memory_error(void);
 
+// The host file currently mapped as the flash window. Shown by the debug menu.
+const char *native_memory_save_path(void);
+
 // True once the ROM has been mapped and its pointer tables patched.
 bool native_rom_ready(void);
 
@@ -121,12 +136,42 @@ void native_timing_ack(uint16_t flags);
 
 // Creates the SDL2 window and GL context.
 bool native_video_init(int scale);
-void native_video_render(void);
+
+// Hands the just-rendered frame to the present thread.
+//
+// This is deliberately a non-blocking publish, not a draw. It used to be
+// native_video_render(), which uploaded the texture and blocked in
+// SDL_GL_SwapWindow on vsync -- from inside the VBlank interrupt handler,
+// which itself runs inside the game's WaitForVBlank spin. The game's VBlank
+// servicing was therefore gated on the display, and there was nowhere off the
+// interrupt path to run an overlay. See video.c.
+void native_video_publish_frame(void);
+
+// Blocks until the present thread has drained the last published frame and
+// torn the GL context down. Called once, at shutdown.
 void native_video_shutdown(void);
 
 // Pumps SDL events and refreshes REG_KEYINPUT. Returns false if the window was
 // closed.
+//
+// Runs on the game's thread inside the VBlank handler: the input has to be
+// sampled at the top of VBlank (see the memory notes on ReadKeys and
+// one-frame-late presses), which only this thread can honour.
 bool native_input_poll(void);
+
+// Hands every event the poll above dequeued to the overlay. Call from the
+// present thread before native_debug_menu_render(). The queue is lock-free and
+// sized to absorb a burst between two VBlanks; it drops rather than blocks.
+void native_video_drain_events(void);
+
+// The present thread's copy of the keyboard state, for the overlay to draw.
+uint16_t native_video_last_keyinput(void);
+
+// The window and GL context, for the ImGui SDL2 backend to bind to. Both are
+// created on the game's thread (video.c) and handed to the present thread,
+// which is where they stay current.
+SDL_Window *native_video_window(void);
+void *native_video_gl_context(void);
 
 // ---------------------------------------------------------------------------
 // PPU (ppu.c)
@@ -135,11 +180,59 @@ bool native_input_poll(void);
 // Service any immediate DMA the game has armed since the last call.
 void native_dma_service_now(void);
 
+// Channel state for the debug overlay. Reads the emulated DMA registers only.
+void native_dma_get_channel(int n, uint32_t *sad, uint32_t *dad, uint32_t *cnt);
+bool native_dma_channel_armed(int n);
+bool native_dma_channel_is_hblank(int n);
+
 void native_ppu_render_frame(void);
 const uint32_t *native_ppu_framebuffer(void);
 
 // Layer isolation toggles for the debug menu: BG0..BG3, OBJ, backdrop.
 extern bool native_ppu_layer_visible[6];
+
+// Window and blend isolation, set by the debug menu through the command queue
+// (never written directly by the overlay -- see debug_menu.c).
+extern bool native_ppu_window_visible;
+extern bool native_ppu_blend_enabled;
+
+// ---------------------------------------------------------------------------
+// Debug overlay (debug_menu.c)
+// ---------------------------------------------------------------------------
+//
+// Split across two translation units because the overlay needs the game's
+// headers (which are C -- sprite.h uses `template` as an identifier) and ImGui
+// (which is C++ and has no extern "C" guards). debug_menu.c is the C half: the
+// lock-free command queue and every read-only probe of live game state.
+// debug_menu_ui.cpp is the C++ half: it drains that queue, then builds and
+// draws the panels. Only debug_menu_ui.cpp talks to ImGui.
+
+// Brings up the overlay. Call from the present thread, with a current GL
+// context. A no-op if the context is unusable (the offscreen/headless path).
+void native_debug_menu_init(void);
+
+// Opens the overlay at startup instead of waiting for F1. Set from --menu.
+void native_debug_menu_set_visible(bool visible);
+
+// Drains the command queue and draws one frame of the overlay. Call from the
+// present thread after the game's GL work for the frame, before the swap.
+//
+// `fb` is the RGBA frame the caller just drew, so the PPU inspector shows the
+// same image that was presented rather than re-reading the game's framebuffer
+// (which the game's thread is concurrently rewriting). NULL means "nothing new
+// this iteration".
+void native_debug_menu_render(const uint32_t *fb);
+
+// Publishes the present thread's measured rate, for the overlay's header.
+void native_debug_menu_note_frame(float fps);
+
+// Feeds one SDL event to ImGui. Called from the present thread by
+// native_video_drain_events(); the parameter is a `const SDL_Event *` in the
+// video layer and is declared as an opaque pointer here so native.h does not
+// have to include SDL.h.
+void native_debug_menu_process_event(const void *sdlEvent);
+
+void native_debug_menu_shutdown(void);
 
 // ---------------------------------------------------------------------------
 // Platform services
@@ -156,5 +249,9 @@ void native_input_schedule(int frame, uint16_t bits);
 // Set when the user closes the window; AgbMain's loop cannot return on its own.
 void native_request_shutdown(void);
 bool native_shutdown_requested(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // PLATFORM_NATIVE_H

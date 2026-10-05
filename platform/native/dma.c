@@ -297,3 +297,39 @@ void native_dma_service_hblank(int scanline)
         dma_run_once(n, NULL);
     }
 }
+
+// Channel state for the debug overlay. A repeating HBlank channel keeps
+// DMAW_ENABLE set after it fires and advances SAD each line, so "armed" means
+// the enable bit plus the HBlank start timing; dst is where it is writing now.
+void native_dma_get_channel(int n, uint32_t *sad, uint32_t *dad, uint32_t *cnt)
+{
+    if (n < 0 || n > 3)
+    {
+        if (sad) *sad = 0;
+        if (dad) *dad = 0;
+        if (cnt) *cnt = 0;
+        return;
+    }
+
+    uint32_t s = 0, d = 0, c = 0;
+    dma_read(n, &s, &d, &c);
+    if (sad) *sad = s;
+    if (dad) *dad = d;
+    if (cnt) *cnt = c;
+}
+
+bool native_dma_channel_armed(int n)
+{
+    uint32_t sad, dad, ctl;
+    native_dma_get_channel(n, &sad, &dad, &ctl);
+    return (ctl & DMAW_ENABLE) != 0;
+}
+
+bool native_dma_channel_is_hblank(int n)
+{
+    uint32_t sad, dad, ctl;
+    native_dma_get_channel(n, &sad, &dad, &ctl);
+    if (!(ctl & DMAW_ENABLE))
+        return false;
+    return (ctl & 0x30000000u) == DMAW_START_HBLANK;
+}

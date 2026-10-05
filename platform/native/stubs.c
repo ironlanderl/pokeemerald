@@ -169,10 +169,6 @@ COMMON_DATA struct MusicPlayerTrack gMPlayTrack_SE1[3] = {0};
 COMMON_DATA struct MusicPlayerTrack gMPlayTrack_SE2[9] = {0};
 COMMON_DATA struct MusicPlayerTrack gMPlayTrack_SE3[1] = {0};
 
-// --- debug menu -----------------------------------------------------------
-//
-// Wired up in a later phase; declared weak so the input layer can call it.
-__attribute__((weak)) bool native_debug_menu_toggle_requested(void)
-{
-    return false;
-}
+// The debug menu's toggle entry point used to be a weak stub here, returning
+// false so the input layer had something to call. It is now real, and lives in
+// debug_menu.c alongside the rest of the overlay.

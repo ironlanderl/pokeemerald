@@ -181,3 +181,57 @@ s16 CheckForSpaceForDma3Request(s16 index)
         return 0;
     }
 }
+
+#if PLATFORM_NATIVE
+// Native debug overlay (platform/native/debug_menu.c) reads the request queue
+// through this instead of duplicating its layout. PLATFORM_NATIVE is defined
+// only by the native build, so this does not exist in -- or change -- the ROM.
+//
+// The cursor and the size fields are read without the lock the manager takes
+// when it mutates them. That is deliberate: the overlay is a diagnostic and a
+// torn read just shows a slightly stale depth, whereas taking the lock here
+// would mean the render thread can block the game's VBlank servicing.
+u32 GetDma3QueueDepth(void)
+{
+    u32 depth = 0;
+    u8 cursor = sDma3RequestCursor;
+
+    for (u32 i = 0; i < MAX_DMA_REQUESTS; i++)
+    {
+        if (sDma3Requests[(cursor + i) % MAX_DMA_REQUESTS].size != 0)
+            depth++;
+    }
+
+    return depth;
+}
+
+u32 GetDma3QueueCapacity(void)
+{
+    return MAX_DMA_REQUESTS;
+}
+
+// The game's C dialect has no `bool` (it uses bool8/TRUE/FALSE), so this
+// returns u8 and debug_menu.c casts.
+u8 IsDma3QueueLocked(void)
+{
+    return sDma3ManagerLocked;
+}
+
+// Total bytes the next ProcessDma3Requests() pass would move, and the cap it
+// stops at (src/dma3_manager.c:56).
+u32 GetDma3PendingBytes(void)
+{
+    u32 bytes = 0;
+    u8 cursor = sDma3RequestCursor;
+
+    for (u32 i = 0; i < MAX_DMA_REQUESTS; i++)
+    {
+        const struct Dma3Request *req = &sDma3Requests[(cursor + i) % MAX_DMA_REQUESTS];
+        if (req->size == 0)
+            break;
+        bytes += req->size;
+    }
+
+    return bytes;
+}
+#endif

@@ -193,3 +193,40 @@ static void UpdateRegDispstatIntrBits(u16 regIE)
     if (oldValue != newValue)
         SetGpuReg(REG_OFFSET_DISPSTAT, newValue);
 }
+
+#if PLATFORM_NATIVE
+// Native debug overlay (platform/native/debug_menu.c) shows the shadow buffer
+// and the pending-write queue. Both are file-static, so expose read-only
+// accessors rather than making the storage linkable.
+//
+// Like the DMA3 accessors, these read without taking sGpuRegBufferLocked: a
+// torn read in a diagnostic must not be able to stall the game's VBlank.
+const u8 *GetGpuRegShadowBuffer(void)
+{
+    return sGpuRegBuffer;
+}
+
+const u8 *GetGpuRegWaitingList(void)
+{
+    return sGpuRegWaitingList;
+}
+
+u8 IsGpuRegBufferLocked(void)
+{
+    return sGpuRegBufferLocked;
+}
+
+u32 CountPendingGpuRegWrites(void)
+{
+    u32 count = 0;
+
+    for (u32 i = 0; i < GPU_REG_BUF_SIZE; i++)
+    {
+        if (sGpuRegWaitingList[i] == EMPTY_SLOT)
+            break;
+        count++;
+    }
+
+    return count;
+}
+#endif

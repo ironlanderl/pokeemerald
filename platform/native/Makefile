@@ -71,12 +71,59 @@ PREPROC := $(abspath $(ROOT)/tools/preproc/preproc)
 # --- sources -----------------------------------------------------------------
 
 GAME_SRCS := $(wildcard $(ROOT)/src/*.c)
-PLAT_SRCS := main.c memory.c timing.c ppu.c video.c bios.c dma.c audio.c stubs.c
+PLAT_SRCS := main.c memory.c timing.c ppu.c video.c bios.c dma.c audio.c stubs.c \
+            debug_menu.c
 
 GAME_OBJS := $(patsubst $(ROOT)/src/%.c,$(OUT)/src/%.o,$(GAME_SRCS))
 PLAT_OBJS := $(patsubst %.c,$(OUT)/plat/%.o,$(PLAT_SRCS))
 
 GEN_OBJS  := $(OUT)/rom_syms.o $(OUT)/rom_patches.o
+
+# --- Dear ImGui debug overlay ----------------------------------------------
+#
+# Vendored from upstream v1.92.9b (commit f1cc2ae), unmodified: only the core
+# and the two backends this port uses. examples/ and imgui_demo.cpp are
+# deliberately not vendored -- the demo window is ~10k lines the overlay does
+# not need.
+#
+# ImGui is C++ with no extern "C" guards, and the overlay has to read the game's
+# headers, which are C (include/sprite.h uses `template` as an identifier). So
+# the overlay is split: debug_menu.c is the C half (command queue, read-only
+# probes of live game state) and debug_menu_ui.cpp is the C++ half (the panels).
+IMGUI_DIR := imgui
+IMGUI_SRCS := \
+  $(IMGUI_DIR)/imgui.cpp \
+  $(IMGUI_DIR)/imgui_draw.cpp \
+  $(IMGUI_DIR)/imgui_tables.cpp \
+  $(IMGUI_DIR)/imgui_widgets.cpp \
+  $(IMGUI_DIR)/backends/imgui_impl_sdl2.cpp \
+  $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
+IMGUI_OBJS := $(patsubst $(IMGUI_DIR)/%.cpp,$(OUT)/imgui/%.o,$(IMGUI_SRCS))
+
+# CXX follows CC so a cross build stays consistent.
+ifeq ($(ARCH),)
+  CXX := g++
+else
+  CXX := $(ARCH)-linux-gnu-g++
+endif
+
+# The ImGui OpenGL3 backend would otherwise pull in its own bundled gl3w
+# loader (imgui_impl_opengl3_loader.h), which this port deliberately does not
+# vendor: video.c already uses GLEW, and having two loaders disagree about the
+# entry points is how you get a backend that works in isolation and not in the
+# program. IMGUI_IMPL_OPENGL_LOADER_CUSTOM tells it to use ours, and
+# -include GL/glew.h puts those declarations ahead of the backend's own body.
+#
+# imgui_impl_sdl2.cpp needs its own -I for <SDL.h>.
+IMGUI_CXXFLAGS := -O2 -g -std=c++17 \
+  -DIMGUI_IMPL_OPENGL_LOADER_CUSTOM \
+  -include GL/glew.h \
+  -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends \
+  $(SDL_CFLAGS)
+
+UI_CXXFLAGS := -O2 -g -std=c++17 \
+  -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends \
+  $(SDL_CFLAGS)
 
 # rompatch needs to know which symbols the native objects already define, so
 # that ROM-resident names with a native C definition are not emitted twice.
@@ -86,7 +133,7 @@ ROMPATCH  := $(OUT)/rompatch
 all: $(OUT)/$(TARGET)
 
 dirs:
-	@mkdir -p $(OUT)/src $(OUT)/plat $(OUT)/gen
+	@mkdir -p $(OUT)/src $(OUT)/plat $(OUT)/gen $(OUT)/imgui $(OUT)/imgui/backends
 
 # --- 1. the ROM build --------------------------------------------------------
 #
@@ -134,8 +181,9 @@ $(OUT)/extern_syms.txt: | dirs
 	   done; \
 	 } | awk 'NF==3 {sub(/@@.*$$/, "", $$3); print $$3}' | sort -u > $@
 
-$(OUT)/native_syms.txt: $(GAME_OBJS) $(PLAT_OBJS) $(NATIVE_EXTERN_SYMS)
-	@for f in $(GAME_OBJS) $(PLAT_OBJS); do \
+$(OUT)/native_syms.txt: $(GAME_OBJS) $(PLAT_OBJS) $(CXX_OBJS) $(NATIVE_EXTERN_SYMS)
+	@for f in $(GAME_OBJS) $(PLAT_OBJS) $(CXX_OBJS); do \
+	   nm --defined-only --demangle $$f 2>/dev/null | awk 'NF==3 {print $$3}'; \
 	   nm --defined-only $$f 2>/dev/null | awk 'NF==3 {print $$3}'; done \
 	  | sort -u > $@
 	@cat $(NATIVE_EXTERN_SYMS) >> $@
@@ -179,17 +227,38 @@ $(OUT)/src/%.o: $(ROOT)/src/%.c | dirs
 	   < $(CURDIR)/$(OUT)/src/$*.i > $(CURDIR)/$(OUT)/src/$*.pp.c
 	@$(CC) $(CFLAGS) -c -o $@ $(OUT)/src/$*.pp.c
 
-$(OUT)/plat/%.o: %.c | dirs
+$(OUT)/plat/%.o: %.c native.h debug_menu.h | dirs
 	$(CC) $(CFLAGS) -I$(CURDIR) -c -o $@ $<
+
+# --- 3b. C++ overlay -------------------------------------------------------
+$(OUT)/imgui/%.o: $(IMGUI_DIR)/%.cpp | dirs
+	$(CXX) $(IMGUI_CXXFLAGS) -c -o $@ $<
+
+# debug_menu_ui.cpp and debug_menu.c share debug_menu.h, and the linkage
+# between them depends on it: without the extern "C" guard the C++ half
+# mangles every name the C half defines and the link fails. Listing the header
+# as a prerequisite matters for the same reason -- an edit to it has to
+# invalidate both objects, or the next build links a stale one against a fresh
+# one.
+$(OUT)/plat/debug_menu_ui.o: debug_menu_ui.cpp debug_menu.h native.h | dirs
+	$(CXX) $(UI_CXXFLAGS) -I$(CURDIR) -c -o $@ $<
+
+CXX_OBJS := $(OUT)/plat/debug_menu_ui.o $(IMGUI_OBJS)
 
 # --- 4. link -----------------------------------------------------------------
 # native.ld is an order-only prerequisite: it must not reach the link line twice.
-$(OUT)/$(TARGET): $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) | native.ld
+#
+# The C++ objects come last and pull in libstdc++ explicitly: the link driver is
+# $(CC) (gcc), not $(CXX), so nothing would add the C++ runtime otherwise and the
+# ImGui statics in it would be left undefined. -lstdc++ is listed after the
+# objects for the ordinary reason -- link order -- and also on the command line
+# so the ordering does not depend on where the objects sit.
+$(OUT)/$(TARGET): $(GAME_OBJS) $(PLAT_OBJS) $(CXX_OBJS) $(GEN_OBJS) | native.ld
 # -nostartfiles is deliberately NOT used: the port has no crt0 of its own, so
 # the normal Scrt1.o provides _start, which runs the constructors libc needs
 # (including SDL's) before main() forwards to native_main with a real argc/argv.
-	$(CC) -no-pie -T native.ld -o $@ $(GAME_OBJS) $(PLAT_OBJS) $(GEN_OBJS) \
-	   -lc -lm -lpthread $(SDL_LIBS) $(RPATH_LINK)
+	$(CC) -no-pie -T native.ld -o $@ $(GAME_OBJS) $(PLAT_OBJS) $(CXX_OBJS) $(GEN_OBJS) \
+	   -lc -lm -lpthread -lstdc++ $(SDL_LIBS) $(RPATH_LINK)
 	@echo "built $@"
 
 run: all

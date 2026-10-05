@@ -49,6 +49,7 @@ int native_main(int argc, char **argv)
     const char *shot_path = NULL;  // write one PPM here and exit
     int press_at = -1;            // frame at which to simulate a button press
     uint16_t press_bits = 0;
+    bool menu = false;            // open the debug overlay at startup
 
     for (int i = 1; i < argc; i++)
     {
@@ -66,11 +67,16 @@ int native_main(int argc, char **argv)
             press_at = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--press") && i + 1 < argc)
             press_bits = (uint16_t)strtoul(argv[++i], NULL, 0);
+        else if (!strcmp(argv[i], "--menu"))
+            menu = true;
         else if (!strcmp(argv[i], "--help"))
         {
             printf("usage: %s [--rom FILE] [--save FILE] [--scale N]\n"
                    "          [--frames N] [--shot FILE.ppm]\n"
-                   "          [--press-at FRAME --press BITS]\n",
+                   "          [--press-at FRAME --press BITS]\n"
+                   "          [--menu]   open the debug overlay at startup\n"
+                   "\n"
+                   "The overlay also toggles on F1 or Ctrl+Shift+D at any time.\n",
                    argv[0]);
             return 0;
         }
@@ -93,6 +99,8 @@ int native_main(int argc, char **argv)
         native_set_headless(frame_limit, shot_path);
     if (press_at >= 0)
         native_input_schedule(press_at, press_bits);
+    if (menu)
+        native_debug_menu_set_visible(true);
 
     native_log("starting game");
 
