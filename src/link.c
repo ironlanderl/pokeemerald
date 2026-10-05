@@ -245,6 +245,21 @@ bool8 IsWirelessAdapterConnected(void)
     // dereferences gSTWIStatus->timerSelect (src/librfu_stwi.c:64). The main
     // menu calls this from Task_MainMenuCheckSaveFile, so the game segfaulted
     // on entering the menu.
+    //
+    // Do NOT "fix" the missing SetWirelessCommType1() by moving this guard down
+    // past the rfu_LMAN_REQBN_softReset_and_checkID() call. The main menu's item
+    // polarity comes from this function's return value, not from
+    // gWirelessCommType, and on hardware with no adapter the real function
+    // leaves gWirelessCommType at 0 too (SetWirelessCommType1 then
+    // SetWirelessCommType0_Internal). The Mystery Events / E-Reader arms of
+    // Task_HandleMainMenuAPressed that this is claimed to affect sit under
+    // `case HAS_MYSTERY_EVENTS`, which tMenuType can never hold: it is only ever
+    // set to HAS_NO_SAVED_GAME, HAS_SAVED_GAME, or HAS_SAVED_GAME + 1, and
+    // IsMysteryGiftEnabled() is a bool8 so that +1 tops out at HAS_MYSTERY_GIFT
+    // (src/main_menu.c:644-646, 657-659; the file header notes this build has
+    // Mystery Events disabled). Setting gWirelessCommType to 1 would instead
+    // route src/overworld.c, src/trade.c and src/battle_main.c into the same
+    // stubbed RFU stack.
     return FALSE;
 #else
     SetWirelessCommType1();

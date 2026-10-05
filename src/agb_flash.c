@@ -126,6 +126,18 @@ u8 ReadFlash1(u8 *addr)
     return *addr;
 }
 
+#if PLATFORM_NATIVE
+// Same reasoning as ReadFlashId above: the ARM body copies the ReadFlash1
+// machine code into a caller-supplied buffer and hands out a Thumb-bit
+// pointer into it. A host cannot execute a copy at an odd address, and the
+// (s32) casts truncate the 64-bit host address, so PollFlashStatus would
+// point at garbage. ReadFlash1 is already plain portable C that returns
+// *addr, so the direct function pointer is the correct host equivalent.
+void SetReadFlash1(u16 *dest)
+{
+    PollFlashStatus = ReadFlash1;
+}
+#else
 void SetReadFlash1(u16 *dest)
 {
     u16 *src;
@@ -144,6 +156,7 @@ void SetReadFlash1(u16 *dest)
         i--;
     }
 }
+#endif
 
 // Using volatile here to make sure the flash memory will ONLY be read as bytes, to prevent any compiler optimizations.
 void ReadFlash_Core(vu8 *src, u8 *dest, u32 size)
@@ -213,6 +226,49 @@ u32 VerifyFlashSector_Core(u8 *src, u8 *tgt, u32 size)
     return 0;
 }
 
+#if PLATFORM_NATIVE
+// Same ARM-copy trick as SetReadFlash1: the ARM body copies
+// VerifyFlashSector_Core's machine code into a stack buffer and calls it
+// through a Thumb-bit pointer into that buffer. A host cannot execute a copy
+// at an odd address, and the (s32) cast truncates the 64-bit host address, so
+// the call would jump to garbage. VerifyFlashSector_Core is already portable C,
+// so call it directly.
+u32 VerifyFlashSector(u16 sectorNum, u8 *src)
+{
+    u8 *tgt;
+    u16 size;
+
+    REG_WAITCNT = (REG_WAITCNT & ~WAITCNT_SRAM_MASK) | WAITCNT_SRAM_8;
+
+    if (gFlash->romSize == FLASH_ROM_SIZE_1M)
+    {
+        SwitchFlashBank(sectorNum / SECTORS_PER_BANK);
+        sectorNum %= SECTORS_PER_BANK;
+    }
+
+    tgt = FLASH_BASE + (sectorNum << gFlash->sector.shift);
+    size = gFlash->sector.size;
+
+    return VerifyFlashSector_Core(src, tgt, size);
+}
+
+u32 VerifyFlashSectorNBytes(u16 sectorNum, u8 *src, u32 n)
+{
+    u8 *tgt;
+
+    if (gFlash->romSize == FLASH_ROM_SIZE_1M)
+    {
+        SwitchFlashBank(sectorNum / SECTORS_PER_BANK);
+        sectorNum %= SECTORS_PER_BANK;
+    }
+
+    REG_WAITCNT = (REG_WAITCNT & ~WAITCNT_SRAM_MASK) | WAITCNT_SRAM_8;
+
+    tgt = FLASH_BASE + (sectorNum << gFlash->sector.shift);
+
+    return VerifyFlashSector_Core(src, tgt, n);
+}
+#else
 u32 VerifyFlashSector(u16 sectorNum, u8 *src)
 {
     u16 i;
@@ -286,6 +342,7 @@ u32 VerifyFlashSectorNBytes(u16 sectorNum, u8 *src, u32 n)
 
     return verifyFlashSector_Core(src, tgt, n);
 }
+#endif
 
 u32 ProgramFlashSectorAndVerify(u16 sectorNum, u8 *src)
 {
