@@ -271,7 +271,10 @@ const struct PokemonCrySong gPokemonCrySongTemplate =
 #else
     .tone = SAVE_PTR_TO((struct ToneData *)&voicegroup_dummy),
 #endif
-    .part = {NULL, NULL},
+    // `part` is uptr32, not a pointer type, so it needs integer initialisers.
+    // Same dead data as `tone` above: SetPokemonCryTone points both entries at
+    // this struct's own part0/part1 before the song is ever started.
+    .part = {0, 0},
     .gap = 0,
     .part0 = TUNE,
     .tuneValue = C_V,

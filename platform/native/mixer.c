@@ -913,11 +913,16 @@ void NativeMixFrame(struct SoundInfo *si)
                     chan->statusFlags |= SOUND_CHANNEL_SF_SPECIAL;
                     if (chan->type & TONEDATA_TYPE_REV)
                     {
-                        // A reverse wave starts `count` samples from the end
-                        // and walks back toward the start, so the anchor moves
-                        // to wav->data + (size - count).
-                        chan->currentPointer =
-                            (s8 *)chan->wav->data + (chan->wav->size - chan->count);
+                        // A reverse wave walks backwards from the end of the
+                        // region the note still has to play, so the anchor is
+                        // data + count -- not data + (size - count). `count` was
+                        // the note's start offset until the SF_START handler
+                        // above turned it into the remaining length
+                        // (size - offset), m4a_1.s:191-193, and the anchor runs
+                        // after that. m4a_1.s:480-484 computes
+                        // size + 2 * data - (data + offset), which is the same
+                        // thing: data + count.
+                        chan->currentPointer = (s8 *)chan->wav->data + chan->count;
                     }
                     if (chan->wav->type != 0)
                     {
