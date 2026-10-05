@@ -98,10 +98,9 @@ void MPlayJumpTableCopy(MPlayFunc *mplayJumpTable)
         mplayJumpTable[i] = (MPlayFunc)gMPlayJumpTableTemplate[i];
 }
 
-// --- debug menu -----------------------------------------------------------
+// The m4a stubs that used to live here -- m4aSoundVSync, the ply_* command
+// handlers, and the gMPlayTrack_* buffers -- are real now: pcmout.c owns
+// m4aSoundVSync and seq.c owns the sequencer and the track buffers.
 //
-// Wired up in a later phase; declared weak so the input layer can call it.
-__attribute__((weak)) bool native_debug_menu_toggle_requested(void)
-{
-    return false;
-}
+// native_debug_menu_toggle_requested() likewise used to be a weak stub here.
+// The overlay is real and lives in debug_menu.c alongside the rest of it.

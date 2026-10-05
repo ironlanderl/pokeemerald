@@ -14,6 +14,7 @@
 #include "main.h"
 #include "palette.h"
 #include "native.h"
+#include "debug_menu.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -294,16 +295,29 @@ bool native_timing_run_interrupt(void)
         *(volatile uint16_t *)(NATIVE_IO + REG_OFFSET_IF) = __atomic_load_n(&s_if, __ATOMIC_SEQ_CST);
 
         // VBlank is where the real hardware scans out the frame, and where
-        // AgbMain's WaitForVBlank unblocks. Render and present here so the
-        // image is produced at exactly the moment the game expects it, and so
-        // the window/input stay responsive without a second thread.
+        // AgbMain's WaitForVBlank unblocks. Rasterise here so the image is
+        // produced at exactly the moment the game expects it, then hand it to
+        // the present thread and return.
+        //
+        // The present used to happen here too, inline: native_video_render
+        // blocked in SDL_GL_SwapWindow on vsync, so the game's VBlank
+        // servicing -- the whole frame -- was gated on the display's refresh,
+        // and there was nowhere off the interrupt path to run an overlay.
+        // native_video_publish_frame is a memcpy and an atomic store, so the
+        // game never waits on the display.
         if (flag == INTR_FLAG_VBLANK && s_enabled)
         {
             void native_ppu_render_frame(void);
-            void native_video_render(void);
+            void native_video_publish_frame(void);
             bool native_input_poll(void);
             void native_timing_note_frame(void);
+            void native_debug_drain_commands(void);
             volatile uint16_t *io = (volatile uint16_t *)NATIVE_IO;
+
+            // Apply anything the debug overlay queued before the PPU runs, so
+            // the layer/window/blend flags it changes are settled rather than
+            // being observed half-updated mid-frame.
+            native_debug_drain_commands();
 
             // Run the rest of VBlank with VCOUNT parked at the first VBlank line.
             //
@@ -337,7 +351,7 @@ bool native_timing_run_interrupt(void)
             uint64_t t2 = prof_now_ns();
             prof_ppu_ns += t2 - t1;
             prof_hist_add(prof_hist_ppu, t2 - t1);
-            native_video_render();
+            native_video_publish_frame();
             uint64_t t3 = prof_now_ns();
             prof_video_ns += t3 - t2;
             prof_hist_add(prof_hist_video, t3 - t2);
@@ -355,7 +369,7 @@ bool native_timing_run_interrupt(void)
             }
 #else
             native_ppu_render_frame();
-            native_video_render();
+            native_video_publish_frame();
             native_timing_note_frame();
 #endif
 

@@ -49,6 +49,15 @@ extern const uint64_t g_rom_symbol_addrs[];
 static char s_error[512];
 static bool s_rom_ready;
 
+// Retained so the debug menu can show which host file backs the flash window.
+// map_flash() only ever sees the path as a local, and nothing else keeps it.
+static char s_save_path[4096];
+
+const char *native_memory_save_path(void)
+{
+    return s_save_path;
+}
+
 const char *native_memory_error(void)
 {
     return s_error[0] ? s_error : NULL;
@@ -142,6 +151,8 @@ static uint8_t *map_rom(const char *rom_path)
 // unchanged.
 static uint8_t *map_flash(const char *save_path)
 {
+    snprintf(s_save_path, sizeof(s_save_path), "%s", save_path);
+
     int fd = open(save_path, O_RDWR | O_CREAT, 0644);
     if (fd < 0)
     {

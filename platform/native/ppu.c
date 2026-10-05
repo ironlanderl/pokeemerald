@@ -81,6 +81,11 @@ static uint16_t s_backdrop;
 // Set by the debug menu to isolate layers.
 bool native_ppu_layer_visible[NUM_LAYERS] = {true, true, true, true, true, true};
 
+// Window and blend isolation, same deal: the debug menu drives these so a
+// screen can be checked with WININ/WINOUT or BLDCNT forced neutral.
+bool native_ppu_window_visible = true;
+bool native_ppu_blend_enabled = true;
+
 // ---------------------------------------------------------------------------
 // Raw memory access
 // ---------------------------------------------------------------------------
@@ -642,8 +647,15 @@ static void RenderScanline(int y)
         }
 
         // Window selection decides which layers contribute.
-        bool inW0 = (dispcnt & DISPCNT_WIN0_ON) && PixelInWindow(dispcnt, win0h, win0v, x, y, false);
-        bool inW1 = (dispcnt & DISPCNT_WIN1_ON) && PixelInWindow(dispcnt, win1h, win1v, x, y, true);
+        //
+        // native_ppu_window_visible is the debug menu's "ignore windows"
+        // switch. With it off, inW0/inW1 stay false and the mask falls
+        // through to the WINOUT branch (or the no-window branch), which is
+        // what isolating a layer needs.
+        bool inW0 = native_ppu_window_visible && (dispcnt & DISPCNT_WIN0_ON)
+                 && PixelInWindow(dispcnt, win0h, win0v, x, y, false);
+        bool inW1 = native_ppu_window_visible && (dispcnt & DISPCNT_WIN1_ON)
+                 && PixelInWindow(dispcnt, win1h, win1v, x, y, true);
 
         // Bit layout (include/gba/io_reg.h): for window 0, BG0..BG3 occupy
         // bits 0-3, OBJ is bit 4 and CLR bit 5; window 1 repeats that at bits
@@ -661,7 +673,7 @@ static void RenderScanline(int y)
             bgMask = (winin >> 8) & 0x0F;
             objEnabled = (winin & (1 << 12)) != 0;
         }
-        else if (dispcnt & (DISPCNT_WIN0_ON | DISPCNT_WIN1_ON))
+        else if (native_ppu_window_visible && (dispcnt & (DISPCNT_WIN0_ON | DISPCNT_WIN1_ON)))
         {
             // At least one window region exists, so the outside region exists
             // as well -- GBATEK: "if any of these regions is enabled then the
@@ -701,7 +713,7 @@ static void RenderScanline(int y)
         // 13 -- but that half of the register belongs to WINOBJ regardless of
         // which of win0/win1/outside we are in, so take it from WININ for windows
         // and WINOUT otherwise.
-        if ((dispcnt & DISPCNT_OBJWIN_ON) && objWindowHit)
+        if ((dispcnt & DISPCNT_OBJWIN_ON) && objWindowHit && native_ppu_window_visible)
         {
             uint16_t objMaskSrc = (inW0 || inW1) ? winin : winout;
             for (int i = 0; i < 4; i++)
@@ -738,7 +750,9 @@ static void RenderScanline(int y)
         // both enabled and listed; it is then blended with the topmost enabled
         // second-target layer (or the backdrop if none).
         uint16_t first = 0;
-        uint32_t t1 = bldcnt & 0x3F;
+        // A zero target mask leaves nothing to blend with, so the debug menu's
+        // blend switch can simply zero t1/t2 rather than branch here.
+        uint32_t t1 = native_ppu_blend_enabled ? (bldcnt & 0x3F) : 0;
         for (int i = 0; i < 4; i++)
             if (bgColor[i] != 0 && (t1 & (1u << i)))
             {
