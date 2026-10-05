@@ -427,7 +427,7 @@ void ply_note(u32 note_cmd, struct MusicPlayerInfo *mplayInfo, struct MusicPlaye
     u8 key;
     u8 rhythmPan = 0;
     u8 cgbType;
-    u8 priority;
+    u32 priority;
     s32 pitch;
 
     track->gateTime = gClockTable[note_cmd];

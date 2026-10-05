@@ -935,8 +935,8 @@ void NativeMixFrame(struct SoundInfo *si)
     // speaker (it is what DMA1/FIFO_A, SOUND_A_RIGHT_OUTPUT, reads).
     if (samples != 0)
     {
-        u8 *right = buf + offset;
-        u8 *left = buf + offset + PCM_DMA_BUF_SIZE;
+        s8 *right = buf + offset;
+        s8 *left = buf + offset + PCM_DMA_BUF_SIZE;
         u32 n;
 
         ApuUpdateRegisters(si->cgbChans, (u32)si->pcmFreq);
@@ -945,8 +945,8 @@ void NativeMixFrame(struct SoundInfo *si)
             s32 l, r;
 
             ApuRender(&l, &r);
-            right[n] = (u8)((s32)right[n] + r * 2);
-            left[n] = (u8)((s32)left[n] + l * 2);
+            right[n] = (s8)((s32)right[n] + r * 2);
+            left[n] = (s8)((s32)left[n] + l * 2);
         }
     }
 }
