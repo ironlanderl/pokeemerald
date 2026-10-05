@@ -131,21 +131,26 @@ static s32 DecodeDPCM(struct SoundChannel *chan, u32 index)
 struct LoopInfo
 {
     u32 size;
-    // A byte offset from the channel's current pointer for a plain wave, a
-    // sample index for a DPCM wave. Both are relative to currentPointer, so the
-    // two interpolators share the same wrap arithmetic.
-    u32 start;
+    // The ARM original precomputes `wav->data + wav->loopStart` once per
+    // channel per frame and jumps straight to it on the seam, so it is an
+    // absolute address for a plain wave.
+    s8 *start;
+    // A DPCM wave addresses the compressed stream by sample index instead, and
+    // for that stream the seam is the raw loopStart value.
+    u32 startIndex;
 };
 
 static void GetLoopInfo(struct SoundChannel *chan, struct LoopInfo *loop)
 {
     loop->size = 0;
-    loop->start = 0;
+    loop->start = NULL;
+    loop->startIndex = 0;
 
     if (chan->statusFlags & SOUND_CHANNEL_SF_LOOP)
     {
         loop->size = chan->wav->size - chan->wav->loopStart;
-        loop->start = chan->wav->loopStart;
+        loop->start = (s8 *)chan->wav->data + chan->wav->loopStart;
+        loop->startIndex = chan->wav->loopStart;
     }
 }
 
@@ -223,15 +228,20 @@ static void MixInterpolated(struct SoundChannel *chan, struct LoopInfo *loop, bo
                     // the loop: the pitch phase (fw) is continuous, so the only
                     // artefact is the seam itself.
                     count = (s32)loop->size;
-                    if (reverse)
+                    pos = 0;
+                    if (dpcm)
+                    {
+                        baseIdx = loop->startIndex;
+                        base = (s8 *)(uintptr_t)baseIdx;
+                    }
+                    else if (reverse)
                     {
                         // A reverse wave restarts at the end of its loop.
                         base = (s8 *)chan->wav->data + chan->wav->size;
-                        baseIdx = chan->wav->size;
                     }
                     else
                     {
-                        pos = (s32)loop->start;
+                        base = loop->start;
                     }
                     sample = FetchAt(chan, base, baseIdx, pos, dpcm);
                     delta = FetchAt(chan, base, baseIdx, pos + dir, dpcm) - sample;
@@ -315,7 +325,8 @@ static void MixFixed(struct SoundChannel *chan, struct LoopInfo *loop, u32 volR,
                 break;
             }
             count = (s32)loop->size;
-            pos = loop->start;
+            base = loop->start;
+            pos = 0;
         }
     }
 
