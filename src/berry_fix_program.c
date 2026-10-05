@@ -236,6 +236,18 @@ static void BerryFix_Main(void)
             }
             break;
         case MAINSTATE_MULTIBOOT:
+#if PLATFORM_NATIVE
+            // There is no link port in this port, so the multiboot probe can
+            // never reach a second Game Boy. REG_SIOMULTI never reports a
+            // client, so MultiBootSend always takes its no-target branch and
+            // calls MultiBootInit, which zeroes probe_count/response_bit --
+            // the condition below is therefore true again on the very next
+            // frame and the timer can never reach 180. MAINSTATE_MULTIBOOT
+            // handles no input, so this is a dead end that only a kill exits.
+            // Take the existing failure scene instead, which waits for A and
+            // returns to MAINSTATE_BEGIN.
+            sBerryFix->state = MAINSTATE_FAILED;
+#else
             MultiBootMain(&sBerryFix->mb);
             if (sBerryFix->mb.probe_count != 0 || (!(sBerryFix->mb.response_bit & 2) || !(sBerryFix->mb.client_bit & 2)))
             {
@@ -250,6 +262,7 @@ static void BerryFix_Main(void)
                                      1);
                 sBerryFix->state = MAINSTATE_TRANSMIT;
             }
+#endif
             break;
         case MAINSTATE_TRANSMIT:
             if (TryScene(SCENE_TRANSMITTING))

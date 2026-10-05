@@ -266,30 +266,50 @@ u16 ArcTan2(s16 x, s16 y)
 // Affine transforms
 // ---------------------------------------------------------------------------
 
+// A BIOS rotation angle runs 0x0000-0xFFFF over a full turn, so a quarter turn
+// is 0x4000 rather than 1.5708 radians. The BIOS only reads the upper 8 bits of
+// the angle (GBATEK, "BIOS Rotation/Scaling Functions": "the GBA BIOS recurses
+// only the upper 8bit"), which is why the game masks the accumulated sprite
+// angle with & ~0xFF before handing it over (src/sprite.c:1308).
+#define NATIVE_ANGLE_TO_RADIANS(a) (((double)((a) & 0xFFFF)) * (2.0 * 3.14159265358979323846) / 65536.0)
+
 // BgAffineSet computes a background affine transform from a texture/screen
-// reference pair, writing the resulting 8.8 matrix and origin.
+// reference pair plus a scale and a rotation, writing the resulting 8.8 matrix
+// and origin.
+//
+// The last source field is the *rotation angle*, not a blend factor, and the
+// matrix is the plain scale-then-rotate P:
+//
+//     |  sx*cos(a)  -sx*sin(a) |
+//     |  sy*sin(a)   sy*cos(a) |
+//
+// The previous version multiplied every term by alpha instead, which was wrong
+// twice over: alpha==0 (the title screen's PanFadeAndZoomScreen call) produced
+// an all-zero matrix, so every pixel sampled the same texel and the "Pokemon
+// Emerald" wordmark on affine BG2 never appeared; and any non-zero alpha
+// produced a scaled-but-never-rotated matrix. A rotation of 0 is simply the
+// identity, pa = pd = sx/sy, which is what that call wants.
 void BgAffineSet(struct BgAffineSrcData *src, struct BgAffineDstData *dest, s32 count)
 {
     for (s32 i = 0; i < count; i++)
     {
-        s32 sx = src->sx << 8;
-        s32 sy = src->sy << 8;
+        // cos/sin in 8.8, matching the precision of the P elements themselves.
+        double ang = NATIVE_ANGLE_TO_RADIANS(src->alpha);
+        s32 cosa = (s32)(cos(ang) * 256.0);
+        s32 sina = (s32)(sin(ang) * 256.0);
 
-        // The BIOS returns 0 for a zero divisor, and the game relies on it:
-        // PanFadeAndZoomScreen is called with a zoom of 0 at the start and end of
-        // the intro's fade. Recompiled for the host the divide becomes a real CPU
-        // divide, so a zero divisor raises SIGFPE -- which is what the intro crash
-        // was. Divide by 1 instead, which yields 0 for every term.
-        s32 dsx = sx ? sx : 1;
-        s32 dsy = sy ? sy : 1;
+        dest->pa = (s16)((src->sx * cosa) >> 8);
+        dest->pb = (s16)((-(src->sx * sina)) >> 8);
+        dest->pc = (s16)((src->sy * sina) >> 8);
+        dest->pd = (s16)((src->sy * cosa) >> 8);
 
-        dest->pa = (s16)((src->alpha * src->sy) / dsy);
-        dest->pb = (s16)(-(src->alpha * src->sx) / dsx);
-        dest->pc = (s16)(-(src->alpha * src->texY) / dsy);
-        dest->pd = (s16)((src->alpha * src->texX) / dsx);
-
-        dest->dx = (src->texX * 0x10000) - (dest->pa * src->scrX) - (dest->pb * src->scrY);
-        dest->dy = (src->texY * 0x10000) - (dest->pc * src->scrX) - (dest->pd * src->scrY);
+        // texX/texY carry an 8-bit fractional portion and so do pa..pd, while
+        // scrX/scrY are plain integer screen coordinates -- pa*scrX therefore
+        // already lands in texX's units and needs no rescaling. This is the
+        // texture-space correction that pins (texX, texY) to (scrX, scrY);
+        // the old texX * 0x10000 treated texX as 16.0 and mixed the two.
+        dest->dx = src->texX - (dest->pa * src->scrX + dest->pb * src->scrY);
+        dest->dy = src->texY - (dest->pc * src->scrX + dest->pd * src->scrY);
 
         src++;
         dest++;
@@ -311,8 +331,10 @@ void ObjAffineSet(struct ObjAffineSrcData *src, void *dest, s32 count, s32 offse
     {
         s16 *d = (s16 *)(base + (size_t)i * (size_t)offset * 4);
 
-        // rotation is 8.8 radians, matching the BIOS's fixed-point angle.
-        double ang = (double)(src->rotation & 0xFFFF) / 256.0;
+        // rotation is 0x0000-0xFFFF over a full turn, not radians: a quarter
+        // turn is 0x4000. Treating it as radians made every non-zero sprite
+        // rotation a meaningless number of turns.
+        double ang = NATIVE_ANGLE_TO_RADIANS(src->rotation);
         s32 cosv = (s32)(cos(ang) * 256.0);
         s32 sinv = (s32)(sin(ang) * 256.0);
         s32 xScale = (s32)src->xScale * 0x100;

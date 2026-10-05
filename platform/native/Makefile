@@ -47,6 +47,14 @@ RPATH_LINK := -Wl,-rpath-link,$(shell pkg-config --variable=libdir sdl2)
 
 # The game code is GBA C. These flags mirror the ROM build's MODERN=1 settings,
 # with PLATFORM_NATIVE added to switch on the handful of host-specific paths.
+# The GBA is 32-bit, so the game freely converts between u32 script operands and
+# pointers (T1_READ_PTR and friends, (void *)BG_CHAR_ADDR, (u32)fn >> 16 for the
+# split task pointers, REG_* indices). Those are all benign widenings from a 32-bit
+# value. The genuinely dangerous case is a *function* pointer built by casting an
+# integer: that is what the agb_flash.c Thumb-bit trampolines did, and it crashed
+# every save. Those are gone now (see SetReadFlash1 / VerifyFlashSector), so this
+# pair of flags only hides the benign remainder -- removing it re-surfaces ~850
+# warnings spread over ~50 shared src/ files with no functional gain.
 CFLAGS := -O2 -g \
   -iquote $(ROOT)/include \
   -iquote $(CURDIR) \
