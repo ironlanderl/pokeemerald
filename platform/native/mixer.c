@@ -450,6 +450,8 @@ static void ApuUpdateRegisters(const struct CgbChannel *cgb, u32 sampleRate)
     u8 nr41 = REG_NR41, nr42 = REG_NR42, nr43 = REG_NR43, nr44 = REG_NR44;
     u32 period;
 
+    (void)nr44; // triggers come from the CgbChannel, not from NRx4
+
     if (trig1)
     {
         apu->ch1.phase = 0;
