@@ -147,6 +147,13 @@ extern bool native_ppu_layer_visible[6];
 
 void native_log(const char *fmt, ...);
 
+// Opens the host audio device (if any) and, when wavPath is non-NULL, records
+// every sample the mixer produces to it. A missing device is not an error.
+void native_audio_init(const char *wavPath);
+
+// Closes the device and finalises the WAV header.
+void native_audio_shutdown(void);
+
 // Run a fixed number of frames and optionally write the last one to a PPM.
 void native_set_headless(int frames, const char *shotPath);
 

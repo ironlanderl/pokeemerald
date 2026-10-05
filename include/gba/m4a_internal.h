@@ -54,13 +54,18 @@ struct WaveData
 #define TONEDATA_P_S_PAN    0xc0
 #define TONEDATA_P_S_PAM    TONEDATA_P_S_PAN
 
+// ToneData lives in the ROM (sound/voicegroups), so its pointer is a 32-bit
+// ROM address, not a host pointer. On a 64-bit target a real pointer would be
+// eight bytes and every field after it would read from the wrong place --
+// including for struct MusicPlayerTrack, which embeds a native copy of one.
+// See uptr32 in gba/types.h; the GBA build is byte-for-byte unaffected.
 struct ToneData
 {
     u8 type;
     u8 key;
     u8 length; // sound length (compatible sound)
     u8 pan_sweep; // pan or sweep (compatible sound ch. 1)
-    struct WaveData *wav;
+    uptr32 wav;
     u8 attack;
     u8 decay;
     u8 sustain;
@@ -220,14 +225,17 @@ struct SoundInfo
     s8 ALIGNED(4) pcmBuffer[PCM_DMA_BUF_SIZE * 2];
 };
 
+// SongHeader is assembled into the ROM by the song tables, so its pointers are
+// 32-bit ROM addresses too. struct PokemonCrySong below has to keep matching
+// this layout: SetPokemonCryTone casts a cry song straight to a SongHeader.
 struct SongHeader
 {
     u8 trackCount;
     u8 blockCount;
     u8 priority;
     u8 reverb;
-    struct ToneData *tone;
-    u8 *part[1];
+    uptr32 tone;
+    uptr32 part[1];
 };
 
 struct PokemonCrySong
@@ -236,13 +244,13 @@ struct PokemonCrySong
     u8 blockCount;
     u8 priority;
     u8 reverb;
-    struct ToneData *tone;
-    u8 *part[2];
+    uptr32 tone;
+    uptr32 part[2];
     u8 gap;
     u8 part0; // 0x11
     u8 tuneValue; // 0x12
     u8 gotoCmd; // 0x13
-    u32 gotoTarget; // 0x14
+    uptr32 gotoTarget; // 0x14
     u8 part1; // 0x18
     u8 tuneValue2; // 0x19
     u8 cont[2]; // 0x1A
@@ -420,7 +428,15 @@ extern char gMaxLines[];
 
 u32 umul3232H32(u32 multiplier, u32 multiplicand);
 void SoundMain(void);
+// SoundMainBTM is gMPlayJumpTable[35], which Clear64byte calls with the
+// address to clear. The GBA declares it argument-less and relies on the caller
+// passing r0 anyway; a native definition cannot read an argument it was not
+// declared with, so it takes the pointer here.
+#if PLATFORM_NATIVE
+void SoundMainBTM(void *x);
+#else
 void SoundMainBTM(void);
+#endif
 void TrackStop(struct MusicPlayerInfo *mplayInfo, struct MusicPlayerTrack *track);
 void MPlayMain(struct MusicPlayerInfo *);
 void RealClearChain(void *x);

@@ -644,7 +644,7 @@ void MPlayStart(struct MusicPlayerInfo *mplayInfo, struct SongHeader *songHeader
         mplayInfo->ident++;
         mplayInfo->status = 0;
         mplayInfo->songHeader = songHeader;
-        mplayInfo->tone = songHeader->tone;
+        mplayInfo->tone = SAVE_PTR_FROM(songHeader->tone);
         mplayInfo->priority = songHeader->priority;
         mplayInfo->clock = 0;
         mplayInfo->tempoD = 150;
@@ -661,7 +661,7 @@ void MPlayStart(struct MusicPlayerInfo *mplayInfo, struct SongHeader *songHeader
             TrackStop(mplayInfo, track);
             track->flags = MPT_FLG_EXIST | MPT_FLG_START;
             track->chan = 0;
-            track->cmdPtr = songHeader->part[i];
+            track->cmdPtr = SAVE_PTR_FROM(songHeader->part[i]);
             i++;
             track++;
         }
@@ -1570,7 +1570,7 @@ void ply_xwave(struct MusicPlayerInfo *mplayInfo, struct MusicPlayerTrack *track
     READ_XCMD_BYTE(wav, 2)
     READ_XCMD_BYTE(wav, 3)
 
-    track->tone.wav = (struct WaveData *)wav;
+    track->tone.wav = SAVE_PTR_TO(wav);
     track->cmdPtr += 4;
 }
 
@@ -1702,10 +1702,10 @@ start_song:
 
     gPokemonCrySongs[i] = gPokemonCrySong;
 
-    gPokemonCrySongs[i].tone = tone;
-    gPokemonCrySongs[i].part[0] = &gPokemonCrySongs[i].part0;
-    gPokemonCrySongs[i].part[1] = &gPokemonCrySongs[i].part1;
-    gPokemonCrySongs[i].gotoTarget = (u32)&gPokemonCrySongs[i].cont;
+    gPokemonCrySongs[i].tone = SAVE_PTR_TO(tone);
+    gPokemonCrySongs[i].part[0] = SAVE_PTR_TO(&gPokemonCrySongs[i].part0);
+    gPokemonCrySongs[i].part[1] = SAVE_PTR_TO(&gPokemonCrySongs[i].part1);
+    gPokemonCrySongs[i].gotoTarget = SAVE_PTR_TO(&gPokemonCrySongs[i].cont);
 
     mplayInfo->ident = ID_NUMBER;
 

@@ -71,7 +71,8 @@ PREPROC := $(abspath $(ROOT)/tools/preproc/preproc)
 # --- sources -----------------------------------------------------------------
 
 GAME_SRCS := $(wildcard $(ROOT)/src/*.c)
-PLAT_SRCS := main.c memory.c timing.c ppu.c video.c bios.c dma.c audio.c stubs.c
+PLAT_SRCS := main.c memory.c timing.c ppu.c video.c bios.c dma.c \
+             mixer.c seq.c pcmout.c stubs.c
 
 GAME_OBJS := $(patsubst $(ROOT)/src/%.c,$(OUT)/src/%.o,$(GAME_SRCS))
 PLAT_OBJS := $(patsubst %.c,$(OUT)/plat/%.o,$(PLAT_SRCS))

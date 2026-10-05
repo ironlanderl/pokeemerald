@@ -44,6 +44,7 @@ int native_main(int argc, char **argv)
 {
     const char *rom_path = kDefaultRom;
     const char *save_path = kDefaultSave;
+    const char *wav_path = NULL;
     int scale = 3;
     int frame_limit = 0;          // 0 = run until the window closes
     const char *shot_path = NULL;  // write one PPM here and exit
@@ -62,6 +63,8 @@ int native_main(int argc, char **argv)
             frame_limit = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--shot") && i + 1 < argc)
             shot_path = argv[++i];
+        else if (!strcmp(argv[i], "--audio") && i + 1 < argc)
+            wav_path = argv[++i];
         else if (!strcmp(argv[i], "--press-at") && i + 1 < argc)
             press_at = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--press") && i + 1 < argc)
@@ -70,6 +73,7 @@ int native_main(int argc, char **argv)
         {
             printf("usage: %s [--rom FILE] [--save FILE] [--scale N]\n"
                    "          [--frames N] [--shot FILE.ppm]\n"
+                   "          [--audio FILE.wav]\n"
                    "          [--press-at FRAME --press BITS]\n",
                    argv[0]);
             return 0;
@@ -85,6 +89,8 @@ int native_main(int argc, char **argv)
 
     native_timing_init();
     native_timing_start_clock();
+
+    native_audio_init(wav_path);
 
     if (!native_video_init(scale))
         return 1;
@@ -105,5 +111,6 @@ int native_main(int argc, char **argv)
     AgbMain();
 
     native_video_shutdown();
+    native_audio_shutdown();
     return 0;
 }

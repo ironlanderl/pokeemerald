@@ -262,7 +262,15 @@ const struct PokemonCrySong gPokemonCrySongTemplate =
     .blockCount = 0,
     .priority = 255,
     .reverb = 0,
-    .tone = (struct ToneData *)&voicegroup_dummy,
+#if PLATFORM_NATIVE
+    // A host pointer is not a constant expression, so this field cannot hold
+    // &voicegroup_dummy in a static initialiser. Nothing reads it: the cry
+    // song is a template for gPokemonCrySongs[], and SetPokemonCryTone
+    // overwrites `tone` with the real cry voice before it is used.
+    .tone = 0,
+#else
+    .tone = SAVE_PTR_TO((struct ToneData *)&voicegroup_dummy),
+#endif
     .part = {NULL, NULL},
     .gap = 0,
     .part0 = TUNE,
