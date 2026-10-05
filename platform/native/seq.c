@@ -451,9 +451,11 @@ void ply_note(u32 note_cmd, struct MusicPlayerInfo *mplayInfo, struct MusicPlaye
     }
 
     // A key-split voice resolves the note through its key table into one of
-    // twelve sub-voices; a rhythm voice takes its pan from the sub-voice's
-    // pan_sweep field. The key table shares ToneData's `attack` slot -- see
-    // asm/macros/music_voice.inc's voice_keysplit, and the
+    // twelve sub-voices; a rhythm (drumset) voice takes its pan from the
+    // sub-voice's pan_sweep field and its "key" from the sub-voice's type byte,
+    // which is how a drumset picks a different sample per MIDI channel. A pure
+    // key split keeps the track's own key. The key table shares ToneData's
+    // `attack` slot -- see asm/macros/music_voice.inc's voice_keysplit and the
     // o_MusicPlayerTrack_ToneData_keySplitTable alias in
     // constants/m4a_constants.inc.
     if (track->tone.type & (TONEDATA_TYPE_RHY | TONEDATA_TYPE_SPL))
@@ -462,22 +464,25 @@ void ply_note(u32 note_cmd, struct MusicPlayerInfo *mplayInfo, struct MusicPlaye
 
         if (track->tone.type & TONEDATA_TYPE_SPL)
         {
-            // The key split table pointer shares the attack/decay/sustain/
-            // release bytes of the ToneData slot (o_ToneData_keySplitTable is
-            // o_ToneData_attack), so read it back as the word ply_voice stored.
             u32 table;
             memcpy(&table, &track->tone.attack, sizeof(table));
             idx = ((const u8 *)(uintptr_t)table)[track->key];
         }
-        struct ToneData *sub = &((struct ToneData *)SAVE_PTR_FROM(track->tone.wav))[idx];
 
-        if (sub->type & (TONEDATA_TYPE_SPL | TONEDATA_TYPE_RHY))
-            return; // this sub-voice is a pointer to another group, not a voice
+        {
+            struct ToneData *sub = &((struct ToneData *)SAVE_PTR_FROM(track->tone.wav))[idx];
 
-        tone = sub;
-        key = sub->type;
-        if ((track->tone.type & TONEDATA_TYPE_RHY) && (sub->pan_sweep & 0x80))
-            rhythmPan = (u8)((sub->pan_sweep - TONEDATA_P_S_PAN) * 2);
+            if (sub->type & (TONEDATA_TYPE_SPL | TONEDATA_TYPE_RHY))
+                return; // a nested group, not a voice
+
+            tone = sub;
+            if (track->tone.type & TONEDATA_TYPE_RHY)
+            {
+                key = sub->type;
+                if (sub->pan_sweep & 0x80)
+                    rhythmPan = (u8)((sub->pan_sweep - TONEDATA_P_S_PAN) * 2);
+            }
+        }
     }
     else
     {
@@ -524,7 +529,7 @@ void ply_note(u32 note_cmd, struct MusicPlayerInfo *mplayInfo, struct MusicPlaye
                 break;
             }
             if (cand->statusFlags & SOUND_CHANNEL_SF_STOP)
-                continue; // already releasing: free to reuse, never a steal
+                continue; // still releasing: not a candidate for a steal at all
             if (cand->priority < bestPriority)
             {
                 best = cand;
@@ -636,11 +641,13 @@ static void RunTrackCommands(struct MusicPlayerInfo *mplayInfo, struct MusicPlay
 {
     struct SoundInfo *soundInfo = SOUND_INFO_PTR;
 
-    // src/m4a_1.s:1208-1231. A track that still has START set was never
-    // initialised (its song header had no data for it); zero it and mark it
-    // existing-but-idle so the rest of the loop leaves it alone. It must not
-    // be stepped this tick: its cmdPtr is now NULL and its wait is zero, and
-    // the original leaves the frame at exactly this point.
+    // src/m4a_1.s:1213-1231. MPlayStart leaves MPT_FLG_START set on every
+    // track it starts, and ply_note is what clears it. A track that still has
+    // it on its first tick therefore gets its state reset to the defaults here
+    // -- and, because the reset zeroes `wait` while leaving cmdPtr alone, it
+    // falls straight through into the command loop below and reads its first
+    // command in the same tick. That is where a song's opening KEYSH/TEMPO/
+    // VOICE run.
     if (track->flags & MPT_FLG_START)
     {
         ClearTrack64(track);
@@ -649,7 +656,6 @@ static void RunTrackCommands(struct MusicPlayerInfo *mplayInfo, struct MusicPlay
         track->volX = 0x40;
         track->lfoSpeed = 0x16;
         track->tone.type = 1;
-        return;
     }
 
     while (track->wait == 0)

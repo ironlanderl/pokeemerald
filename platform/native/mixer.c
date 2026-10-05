@@ -347,6 +347,7 @@ struct ApuPulse
     u16 period;
     u16 sweepShadow;
     u8 sweepPeriod;
+    u8 sweepPeriodMax;
     u8 sweepShift;
     bool sweepNeg;
     bool enabled;
@@ -388,7 +389,6 @@ struct Apu
     struct ApuPulse ch1, ch2;
     struct ApuWave ch3;
     struct ApuNoise ch4;
-    u8 prevNr14, prevNr24, prevNr34, prevNr44;
     u32 lenDiv;   // fractional 256 Hz tick (the length counters)
     u32 sweepDiv; // fractional 128 Hz tick (channel 1's sweep)
     u32 rate;
@@ -425,18 +425,32 @@ static void ApuLoadWaveRam(void)
     }
 }
 
-static void ApuUpdateRegisters(u32 sampleRate)
+static void ApuUpdateRegisters(const struct CgbChannel *cgb, u32 sampleRate)
 {
     struct Apu *apu = &sApu;
+    // m4a sets statusFlags to exactly SOUND_CHANNEL_SF_ENV_ATTACK when it
+    // starts a note and never returns to that value afterwards (the phases run
+    // down 3 -> 2 -> 1 -> 0), so it is an exact "a note just began" signal.
+    //
+    // Detecting a trigger off NRx4's bit 7 instead does not work: CgbSound
+    // leaves that bit set after writing it, so the next note's write is not an
+    // edge and the oscillator would never restart.
+    bool trig1 = cgb != NULL && cgb[0].statusFlags == SOUND_CHANNEL_SF_ENV_ATTACK;
+    bool trig2 = cgb != NULL && cgb[1].statusFlags == SOUND_CHANNEL_SF_ENV_ATTACK;
+    bool trig3 = cgb != NULL && cgb[2].statusFlags == SOUND_CHANNEL_SF_ENV_ATTACK;
+    bool trig4 = cgb != NULL && cgb[3].statusFlags == SOUND_CHANNEL_SF_ENV_ATTACK;
+
+    // The length and sweep tick dividers below subtract `rate` from a running
+    // total; a zero rate would spin forever.
+    if (sampleRate == 0)
+        sampleRate = 1;
     u8 nr10 = REG_NR10, nr11 = REG_NR11, nr12 = REG_NR12, nr13 = REG_NR13, nr14 = REG_NR14;
     u8 nr21 = REG_NR21, nr22 = REG_NR22, nr23 = REG_NR23, nr24 = REG_NR24;
     u8 nr30 = REG_NR30, nr31 = REG_NR31, nr32 = REG_NR32, nr33 = REG_NR33, nr34 = REG_NR34;
     u8 nr41 = REG_NR41, nr42 = REG_NR42, nr43 = REG_NR43, nr44 = REG_NR44;
     u32 period;
 
-    // A bit 7 appearing in an NRx4 that did not have it is a trigger: this is
-    // how CgbSound restarts a channel.
-    if ((nr14 & 0x80) && !(apu->prevNr14 & 0x80))
+    if (trig1)
     {
         apu->ch1.phase = 0;
         if (apu->ch1.length)
@@ -448,13 +462,12 @@ static void ApuUpdateRegisters(u32 sampleRate)
     apu->ch1.enabled = (nr12 & 0xF8) != 0;
     if (nr11 & 0x40)
         apu->ch1.length = (u8)(64 - (nr11 & 0x3F));
-    apu->ch1.sweepPeriod = (u8)(nr10 >> 4);
+    apu->ch1.sweepPeriodMax = (u8)(nr10 >> 4);
     apu->ch1.sweepShift = (u8)(nr10 & 7);
     apu->ch1.sweepNeg = (nr10 & 8) != 0;
     apu->ch1.sweepShadow = (u16)(nr13 | ((nr10 & 7) << 8));
-    apu->ch1.sweepOn = apu->ch1.sweepPeriod != 0;
 
-    if ((nr24 & 0x80) && !(apu->prevNr24 & 0x80))
+    if (trig2)
     {
         apu->ch2.phase = 0;
         if (apu->ch2.length)
@@ -467,7 +480,7 @@ static void ApuUpdateRegisters(u32 sampleRate)
     if (nr21 & 0x40)
         apu->ch2.length = (u8)(64 - (nr21 & 0x3F));
 
-    if ((nr34 & 0x80) && !(apu->prevNr34 & 0x80))
+    if (trig3)
     {
         apu->ch3.phase = 0;
         apu->ch3.sample = 0;
@@ -479,7 +492,7 @@ static void ApuUpdateRegisters(u32 sampleRate)
     if (nr31 & 0x40)
         apu->ch3.length = (u8)(256 - (nr31 & 0xFF));
 
-    if ((nr44 & 0x80) && !(apu->prevNr44 & 0x80))
+    if (trig4)
     {
         apu->ch4.phase = 0;
         if (apu->ch4.length)
@@ -492,11 +505,6 @@ static void ApuUpdateRegisters(u32 sampleRate)
     apu->ch4.width7 = (nr43 & 8) != 0;
     if (nr41 & 0x40)
         apu->ch4.length = (u8)(64 - (nr41 & 0x3F));
-
-    apu->prevNr14 = nr14;
-    apu->prevNr24 = nr24;
-    apu->prevNr34 = nr34;
-    apu->prevNr44 = nr44;
 
     apu->rate = sampleRate;
 
@@ -543,8 +551,13 @@ static void ApuClockLengths(void)
 // computed and discarded, exactly as on hardware.
 static void ApuClockSweep(struct ApuPulse *p, bool writeBack)
 {
-    if (p->sweepPeriod == 0)
+    if (p->sweepPeriodMax == 0)
+    {
+        p->sweepPeriod = 0;
         return;
+    }
+    if (p->sweepPeriod == 0)
+        p->sweepPeriod = p->sweepPeriodMax;
 
     if (p->sweepShadow > p->period)
     {
@@ -558,7 +571,7 @@ static void ApuClockSweep(struct ApuPulse *p, bool writeBack)
             p->period = (u16)next;
     }
     if (--p->sweepPeriod == 0)
-        p->sweepPeriod = (u8)(REG_NR10 >> 4);
+        p->sweepPeriod = p->sweepPeriodMax;
 }
 
 // Advance one output sample, returning the level per side after the NR50 master
@@ -915,7 +928,7 @@ void NativeMixFrame(struct SoundInfo *si)
         u8 *left = buf + offset + PCM_DMA_BUF_SIZE;
         u32 n;
 
-        ApuUpdateRegisters((u32)si->pcmFreq);
+        ApuUpdateRegisters(si->cgbChans, (u32)si->pcmFreq);
         for (n = 0; n < samples; n++)
         {
             s32 l, r;
